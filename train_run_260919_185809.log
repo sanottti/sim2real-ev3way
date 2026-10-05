@@ -1,0 +1,10 @@
+pybullet build time: Sep 19 2026 08:27:33
+既存の重みを検出: ev3way_w1.npy (shape=(7, 8)), ev3way_w2.npy (shape=(8, 2))
+✅ 既存の重みを引き継いで学習を再開します (sigma0=0.3)
+popsize=200, generations(maxiter)=700, 1世代あたり6シード評価 (学習中は5秒/エピソードで評価)
+ラン開始前のW1をバックアップ: checkpoints/ev3way_w1_before_gen700pop200_260919_185811.npy
+ラン開始前のW2をバックアップ: checkpoints/ev3way_w2_before_gen700pop200_260919_185811.npy
+  gen   1/700: best_reward =    19.0  (この世代  30.8秒, 累計   0.5分)
+  gen   2/700: best_reward =    24.1  (この世代  33.8秒, 累計   1.1分)
+  gen   3/700: best_reward =    24.1  (この世代  36.0秒, 累計   1.7分)
+  gen   4/700: best_reward =    27.9  (この世代  41.0秒, 累計   2.4分)

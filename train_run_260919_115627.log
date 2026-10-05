@@ -1,0 +1,76 @@
+pybullet build time: Sep 19 2026 08:27:33
+既存の重みを検出: ev3way_w1.npy (shape=(7, 8)), ev3way_w2.npy (shape=(8, 2))
+✅ 既存の重みを引き継いで学習を再開します (sigma0=0.15)
+popsize=100, generations(maxiter)=200, 1世代あたり6シード評価 (学習中は5秒/エピソードで評価)
+ラン開始前のW1をバックアップ: checkpoints/ev3way_w1_before_before_gen200pop100_260919_115628.npy
+ラン開始前のW2をバックアップ: checkpoints/ev3way_w2_before_before_gen200pop100_260919_115628.npy
+  gen   1/200: best_reward =    17.8  (この世代  26.2秒, 累計   0.4分)
+  gen   2/200: best_reward =    17.8  (この世代  26.1秒, 累計   0.9分)
+  gen   3/200: best_reward =    19.3  (この世代  26.1秒, 累計   1.3分)
+  gen   4/200: best_reward =    23.6  (この世代  26.2秒, 累計   1.7分)
+  gen   5/200: best_reward =    23.6  (この世代  26.8秒, 累計   2.2分)
+  [checkpoint] gen 5 時点のベスト重みを ev3way_w1.npy/ev3way_w2.npy に中間保存しました
+  gen   6/200: best_reward =    25.1  (この世代  27.2秒, 累計   2.6分)
+  gen   7/200: best_reward =    38.6  (この世代  26.6秒, 累計   3.1分)
+  gen   8/200: best_reward =    38.6  (この世代  26.6秒, 累計   3.5分)
+  gen   9/200: best_reward =    38.6  (この世代  28.2秒, 累計   4.0分)
+  gen  10/200: best_reward =    38.6  (この世代  26.7秒, 累計   4.4分)
+  [checkpoint] gen 10 時点のベスト重みを ev3way_w1.npy/ev3way_w2.npy に中間保存しました
+  gen  11/200: best_reward =    38.6  (この世代  27.5秒, 累計   4.9分)
+  gen  12/200: best_reward =    38.6  (この世代  27.6秒, 累計   5.4分)
+  gen  13/200: best_reward =    38.6  (この世代  26.8秒, 累計   5.8分)
+  gen  14/200: best_reward =    38.6  (この世代  26.3秒, 累計   6.2分)
+  gen  15/200: best_reward =    38.6  (この世代  26.8秒, 累計   6.7分)
+  [checkpoint] gen 15 時点のベスト重みを ev3way_w1.npy/ev3way_w2.npy に中間保存しました
+  gen  16/200: best_reward =    38.6  (この世代  27.1秒, 累計   7.1分)
+  gen  17/200: best_reward =    38.6  (この世代  26.7秒, 累計   7.6分)
+  gen  18/200: best_reward =    38.6  (この世代  27.2秒, 累計   8.0分)
+  gen  19/200: best_reward =    38.6  (この世代  27.4秒, 累計   8.5分)
+  gen  20/200: best_reward =    38.6  (この世代  25.8秒, 累計   8.9分)
+  [checkpoint] gen 20 時点のベスト重みを ev3way_w1.npy/ev3way_w2.npy に中間保存しました
+  gen  21/200: best_reward =    38.6  (この世代  26.7秒, 累計   9.4分)
+  gen  22/200: best_reward =    38.6  (この世代  27.1秒, 累計   9.8分)
+  gen  23/200: best_reward =    54.4  (この世代  26.3秒, 累計  10.3分)
+  gen  24/200: best_reward =    54.4  (この世代  29.1秒, 累計  10.8分)
+  gen  25/200: best_reward =    54.4  (この世代  28.1秒, 累計  11.2分)
+  [checkpoint] gen 25 時点のベスト重みを ev3way_w1.npy/ev3way_w2.npy に中間保存しました
+  gen  26/200: best_reward =    54.4  (この世代  28.6秒, 累計  11.7分)
+  gen  27/200: best_reward =    54.4  (この世代  28.9秒, 累計  12.2分)
+  gen  28/200: best_reward =    54.4  (この世代  28.8秒, 累計  12.7分)
+  gen  29/200: best_reward =    54.4  (この世代  29.0秒, 累計  13.1分)
+  gen  30/200: best_reward =    54.4  (この世代  27.3秒, 累計  13.6分)
+  [checkpoint] gen 30 時点のベスト重みを ev3way_w1.npy/ev3way_w2.npy に中間保存しました
+  gen  31/200: best_reward =    54.4  (この世代  28.9秒, 累計  14.1分)
+  gen  32/200: best_reward =    54.4  (この世代  27.9秒, 累計  14.5分)
+  gen  33/200: best_reward =    54.4  (この世代  27.5秒, 累計  15.0分)
+  gen  34/200: best_reward =    54.4  (この世代  28.3秒, 累計  15.5分)
+  gen  35/200: best_reward =    54.4  (この世代  27.4秒, 累計  15.9分)
+  [checkpoint] gen 35 時点のベスト重みを ev3way_w1.npy/ev3way_w2.npy に中間保存しました
+  gen  36/200: best_reward =    54.4  (この世代  26.8秒, 累計  16.4分)
+  gen  37/200: best_reward =    54.4  (この世代  28.0秒, 累計  16.8分)
+  gen  38/200: best_reward =    54.4  (この世代  27.4秒, 累計  17.3分)
+  gen  39/200: best_reward =    54.4  (この世代  28.1秒, 累計  17.8分)
+  gen  40/200: best_reward =    54.4  (この世代  27.8秒, 累計  18.2分)
+  [checkpoint] gen 40 時点のベスト重みを ev3way_w1.npy/ev3way_w2.npy に中間保存しました
+  gen  41/200: best_reward =    54.4  (この世代  28.5秒, 累計  18.7分)
+  gen  42/200: best_reward =    54.4  (この世代  28.8秒, 累計  19.2分)
+  gen  43/200: best_reward =    54.4  (この世代  29.0秒, 累計  19.7分)
+  gen  44/200: best_reward =    54.4  (この世代  28.8秒, 累計  20.2分)
+  gen  45/200: best_reward =    54.4  (この世代  28.6秒, 累計  20.6分)
+  [checkpoint] gen 45 時点のベスト重みを ev3way_w1.npy/ev3way_w2.npy に中間保存しました
+  gen  46/200: best_reward =    54.4  (この世代  28.2秒, 累計  21.1分)
+  gen  47/200: best_reward =    54.4  (この世代  28.8秒, 累計  21.6分)
+  gen  48/200: best_reward =    54.4  (この世代  28.9秒, 累計  22.1分)
+  gen  49/200: best_reward =    54.4  (この世代  28.7秒, 累計  22.5分)
+  gen  50/200: best_reward =    54.4  (この世代  29.2秒, 累計  23.0分)
+  [checkpoint] gen 50 時点のベスト重みを ev3way_w1.npy/ev3way_w2.npy に中間保存しました
+  gen  51/200: best_reward =    54.4  (この世代  29.8秒, 累計  23.5分)
+  gen  52/200: best_reward =    54.4  (この世代  28.8秒, 累計  24.0分)
+  gen  53/200: best_reward =    54.4  (この世代  29.3秒, 累計  24.5分)
+  gen  54/200: best_reward =    54.4  (この世代  29.8秒, 累計  25.0分)
+  gen  55/200: best_reward =    54.4  (この世代  29.8秒, 累計  25.5分)
+  [checkpoint] gen 55 時点のベスト重みを ev3way_w1.npy/ev3way_w2.npy に中間保存しました
+  gen  56/200: best_reward =    54.4  (この世代  30.5秒, 累計  26.0分)
+  gen  57/200: best_reward =    54.4  (この世代  29.5秒, 累計  26.5分)
+  gen  58/200: best_reward =    54.4  (この世代 480.2秒, 累計  34.5分)
+  gen  59/200: best_reward =    54.4  (この世代  29.9秒, 累計  35.0分)
