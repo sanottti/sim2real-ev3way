@@ -66,5 +66,5 @@ v8の重み(補正migration適用済み)から再開。所要時間749.6分(約1
 
 - `ev3way_w1.npy` / `ev3way_w2.npy` — 最終重み(gen105時点の解、250世代完走)
 - `training_result.mp4` — 最終世代の個体群200体を同時撮影した動画
-- `app_c_snapshot.c` — この時点で`/Users/hiromac02/Downloads/app.c`に
+- `app_c_snapshot.c` — この時点で`nnapp/app.c`に
   反映した内容のスナップショット

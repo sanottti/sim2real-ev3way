@@ -16,7 +16,7 @@
 - 既知の弱点: プッシュ外乱を学習していないため、実機で手で押すような外乱には弱い可能性が高い
 
 ## 実機投入
-`app_c_snapshot.c`が、2026-09-22時点で`/Users/hiromac02/Downloads/app.c`として
+`app_c_snapshot.c`が、2026-09-22時点で`nnapp/app.c`として
 実機投入された内容と同一(W1[7][16]/W2[16][2]、nn_forward()のループ上限・
 h[]サイズも16に更新済み)。
 
@@ -27,5 +27,5 @@ cd "Sim2RealEV3"
 cp known_good/v6_pushfree_20260922/ev3way_w1.npy .
 cp known_good/v6_pushfree_20260922/ev3way_w2.npy .
 cp known_good/v6_pushfree_20260922/training_result.mp4 .
-cp known_good/v6_pushfree_20260922/app_c_snapshot.c /Users/hiromac02/Downloads/app.c
+cp known_good/v6_pushfree_20260922/app_c_snapshot.c nnapp/app.c
 ```

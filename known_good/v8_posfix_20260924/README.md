@@ -34,7 +34,7 @@ POS_LIMIT_RAD超過による早期終了ロジックが正しく機能するこ�
 言えない状態。**実機での検証が必要**。
 
 ## 実機投入
-`/Users/hiromac02/Downloads/app.c` へ2026-09-24に反映済み(v8として)。
+`nnapp/app.c` へ2026-09-24に反映済み(v8として)。
 
 ## 元に戻す手順(v7へロールバックする場合)
 
@@ -43,7 +43,7 @@ cd "Sim2RealEV3"
 cp known_good/v7_com_20260923/ev3way_w1.npy .
 cp known_good/v7_com_20260923/ev3way_w2.npy .
 cp known_good/v7_com_20260923/training_result.mp4 .
-cp known_good/v7_com_20260923/app_c_snapshot.c /Users/hiromac02/Downloads/app.c
+cp known_good/v7_com_20260923/app_c_snapshot.c nnapp/app.c
 ```
 
 ## このv8自体の復元手順

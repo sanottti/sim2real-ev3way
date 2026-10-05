@@ -23,7 +23,7 @@ Sim上の複合最悪条件はv6より悪化しているが、以下の実測・
   v6よりも明らかに多くの個体が最後まで立ったままだった
 
 ## 実機投入
-`/Users/hiromac02/Downloads/app.c` へ2026-09-23に反映済み(v7として)。
+`nnapp/app.c` へ2026-09-23に反映済み(v7として)。
 W1[7][16]/W2[16][2]の値のみ差し替え、隠れ層サイズ自体はv6と同じ16の
 ままなので構造変更(ループ上限等)は不要だった。
 
@@ -39,7 +39,7 @@ cd "Sim2RealEV3"
 cp known_good/v6_pushfree_20260922/ev3way_w1.npy .
 cp known_good/v6_pushfree_20260922/ev3way_w2.npy .
 cp known_good/v6_pushfree_20260922/training_result.mp4 .
-cp known_good/v6_pushfree_20260922/app_c_snapshot.c /Users/hiromac02/Downloads/app.c
+cp known_good/v6_pushfree_20260922/app_c_snapshot.c nnapp/app.c
 ```
 
 ## このv7自体の復元手順
