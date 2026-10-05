@@ -56,10 +56,92 @@ python3 test_sim_matches_appc.py
 ビルドし、BeerHall 等のツールで EV3 本体へ転送します。
 
 > **このリポジトリには EV3RT のビルド環境自体は含まれていません。**
-> 元の開発者は macOS 上で BeerHall を使って転送していました。
-> 具体的なビルド・転送コマンドは各自の EV3RT 環境に依存するため、
-> EV3RT の公式ドキュメントを参照してください。
-> (このセクションは実際に転送作業をしている人が加筆してください)
+> 以下は、元の開発者(macOS / Apple Silicon)が実機で実際に行った手順です。
+> 環境構築そのもの(Xcode CLT、Rosetta、etrobo の初回インストール)は
+> ETロボコン公式の etrobo 手順に従ってください。
+
+### 2-1. 前提(一度だけ)
+
+| 項目 | 内容 |
+|---|---|
+| ビルド環境 | etrobo(BeerHall = サンドボックス Homebrew 上の環境) |
+| `$BEERHALL` | `~/Desktop/BeerHall/` |
+| `$ETROBO_ROOT` | `<BeerHall>/etrobo`(例: `/Users/<user>/Desktop/BeerHall/etrobo`) |
+| クロスコンパイラ | `gcc-arm-none-eabi-6-2017-q1`(自動導入されなかったため、Arm の配布サイトから手動で導入した) |
+| SDカード | 32GB、**FAT32**、**ボリューム名 `EV3RT`**(Mac 上では `/dev/disk6` だった。番号は環境で変わる) |
+| ローダ | `ev3 install` で uImage を SD に書込み済み |
+| アプリ転送先 | `/Volumes/EV3RT/ev3rt/apps/` |
+
+ボリューム名が `EV3RT` で始まっていないと、`make ... up` の自動転送が効きません。
+
+### 2-2. etrobo 環境に入る
+
+```bash
+cd "$BEERHALL" && ./BeerHall
+```
+
+BeerHall の起動がスキップされる場合は、`~/.zprofile` に残っている
+BEERHALL 関連の行(過去の残骸)を削除してから入り直します。
+
+### 2-3. プロジェクトを作る(初回のみ)
+
+```bash
+cd "$ETROBO_ROOT/workspace"
+mkdir -p nnapp && cp sample_c4/Makefile.inc nnapp/
+# あるいは丸ごとコピー: cp -r sample_c4 nnapp
+```
+
+その後、`app.c` / `app.cfg` / `app.h` を `workspace/nnapp/` に置きます。
+このリポジトリの `nnapp/` には `app.c` しかないため、`app.cfg` と `app.h` は
+`sample_c4` のものをベースに用意してください。
+`app.cfg` の `CRE_CYC` で構文エラーが出た場合は、
+`workspace/periodic-task/app.cfg` の書式と見比べて直します。
+
+**プロジェクト名に `app` を使わないでください。** workspace 内の既存ファイル
+(ビルド済みバイナリ)と衝突し、
+`cp: 'app/app.c' を stat できません: Not a directory` になります。
+`rm -f app` で消すか、`nnapp` / `ev3app` / `calib` のような別名にします。
+また、ダウンロードした `app.c` / `app.h` / `app.cfg` はプロジェクトごとに
+同名になるため、「ダウンロード → 配置」を1プロジェクトずつ順に行ってください。
+
+### 2-4. ビルドして SD に転送する
+
+SD カードを Mac に挿した状態で実行します。
+
+```bash
+cd "$ETROBO_ROOT" && make app=nnapp up 2>&1 | tail -3
+```
+
+成功すると次の2行が出ます。
+
+```
+'nnapp' is copied into EV3.
+fakemake on Uhrp3: build succeed: nnapp
+```
+
+これらが出ない場合は SD に書き込まれていません(ソースを更新しただけでは
+実機は変わらない、§3 を参照)。
+
+### 2-5. SD を取り出して実機にセットする
+
+```bash
+diskutil eject /Volumes/EV3RT
+```
+
+1. SD を EV3 に挿して電源を ON にする
+2. ローダメニューで上下ボタンにより `SD card` → 対象プログラムを選ぶ
+   (開発中は `calib`(診断)、`ev3app`(gyroboy 線形制御)、`nnapp`(NN 制御)が
+   同じ階層に並んでいた)
+3. LCD 最上段の `nnapp NN:vXX` が期待どおりか確認する(§3)
+
+実機での操作手順は §4、ログの回収は §5 を参照してください。
+
+### 2-6. 動作確認済み / 未検証
+
+| 項目 | 状態 |
+|---|---|
+| macOS(Apple Silicon)+ BeerHall でのビルド・SD転送 | **実機で確認済み** |
+| Windows 11 + WSL2 でのビルド・SD転送 | **未検証**(`HANDOFF_SIM2REAL.md` に手順案はあるが、実機では未確認) |
 
 ---
 
@@ -88,12 +170,16 @@ python3 test_sim_matches_appc.py
 
 ## 4. 実機での走らせ方
 
-1. ロボットを平らな床に置く
-2. 起動すると LCD に `ready! (NN)` と `touch: GO`、そして `nnapp NN:vXX` が表示される
+1. ロボットを平らな床に置く(尻尾で自立させる)
+2. 起動すると LCD 最上段に `nnapp NN:vXX`、中段に `PUSH TOUCH` が表示される
 3. **LCD のバージョン表示を確認**
-4. タッチセンサを押すと、0.5秒後に尻尾モータが解放され倒立制御が始まる
-5. **必ず手を離して自力で立つか確認する**(手で支えたテストは判断材料にならない)
-6. 転倒(傾き45°超)またはタッチセンサ再押下で停止し、ログが保存される
+4. タッチセンサを押して離す(`PUSH TOUCH` → `RELEASE`)
+5. ジャイロ校正が始まる(`calibrating...` / `hold still`)。**約2.5秒、機体に触らない**。
+   LCD に `ofs`/`rng` と品質(`GOOD` / `so-so` / `BAD!`)が出る(表示のみで、必ず走行可能になる)
+6. `ready! (NN)` / `touch: GO` が出たらタッチセンサを押す。0.5秒後に尻尾モータが解放され倒立制御が始まる
+7. **必ず手を離して自力で立つか確認する**(手で支えたテストは判断材料にならない)
+8. 転倒(傾き45°超)またはタッチセンサ再押下で停止し、ログが保存される
+   (タッチ停止時は PWM を約100msかけて減速してからモータを止める。転倒検知時は即停止)
 
 ### 制御ループの要点(app.c)
 
