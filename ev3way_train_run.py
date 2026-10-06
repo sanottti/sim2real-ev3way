@@ -313,6 +313,15 @@ FIDELITY_QUANTIZATION    = False  # 2-6: エンコーダ量子化+モータ不�
 FIDELITY_STARTUP_DEADTIME = False  # 2-7: 起動時デッドタイムの再現
 FIDELITY_BATTERY_SAG     = False  # 2-8: 負荷に応じた電池電圧サグ
 
+# ★2026-10-06(Phase 5): 実機ログのリプレイ較正(calib_motor.py)による仮のモータ補正。
+#   トルクは約1/4、無負荷回転数は約1.27倍、出力遅れは約22msに収束した。
+#   車体(重心・慣性・質量)は探索範囲の端に張り付き信頼できないため反映しない。
+#   FIDELITY_FLAG_NAMESには含めず(既存の学習済みflag辞書の互換維持)、別フラグとする。
+CALIB_MOTOR = False
+CALIB_TORQUE_SCALE = 0.0512 / 0.20   # 較正KT / Simのmax_torque*derate中心値
+CALIB_SPEED_SCALE = 22.6 / 17.8
+CALIB_DELAY_S = 0.022
+
 FIDELITY_FLAG_NAMES = [
     "FIDELITY_MOTOR_SPEED", "FIDELITY_GYRO_EST", "FIDELITY_OUTPUT_PATH",
     "FIDELITY_CTRL_RATE", "FIDELITY_FALL_ANGLE", "FIDELITY_QUANTIZATION",
@@ -535,6 +544,10 @@ class EV3WayEnv:
             self._gyro_noise_ep    = self.pr["gyro_noise_dps"] * scaled_uniform(0.5, 2.0)
             self._latency_steps_ep = int(round(scaled_uniform(0, 2) * _latency_scale))
         self._voltage_torque_ratio = voltage_ratio
+        if CALIB_MOTOR:
+            self._max_torque_ep *= CALIB_TORQUE_SCALE
+            self._max_speed_ep *= CALIB_SPEED_SCALE
+            self._latency_steps_ep = int(round(CALIB_DELAY_S / effective_ctrl_dt()))
 
         # ★2026-10-01(Phase 5準備): 押し外乱(人が手で押す想定)。
         #   PUSH_FORCE_MAX(Newton)を上限に、エピソード中ランダムな
@@ -659,7 +672,7 @@ class EV3WayEnv:
         self._action_history.append((pl, pr))
         delay = self._latency_steps_ep
         pl_eff, pr_eff = self._action_history[-1-delay] if delay < len(self._action_history) else (0.0,0.0)
-        self._action_history = self._action_history[-3:]
+        self._action_history = self._action_history[-(16 if CALIB_MOTOR else 3):]
 
         if FIDELITY_QUANTIZATION:
             # 2-6: 実機モータの不感帯。小さいduty指令では回転しない。
