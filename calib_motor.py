@@ -24,10 +24,10 @@ R = sim.PARAMS["wheel_radius"]
 LOG_DIRS = ["real_logs/v7_20260929_confirmed", "real_logs/v7_20260924",
             "real_logs/v15_20261001", "real_logs/v16_20261006", "real_logs/v6_20260923"]
 
-PARAM_NAMES = ["KT", "wmax", "deadband", "delay_ms", "com_oz", "inertia_s", "mass_s"]
-P0 = np.array([0.20, 17.8, 0.08, 5.0, 0.0, 1.0, 1.0])
-LO = np.array([0.05, 8.0, 0.0, 0.0, -0.06, 0.4, 0.6])
-HI = np.array([0.80, 40.0, 0.25, 25.0, 0.06, 2.5, 1.6])
+PARAM_NAMES = ["KT", "wmax", "deadband", "delay_ms", "com_oz", "inertia_s", "mass_s", "damp", "tau_ms"]
+P0 = np.array([0.20, 17.8, 0.08, 5.0, 0.0, 1.0, 1.195, 0.0, 1.0])
+LO = np.array([0.02, 8.0, 0.0, 0.0, -0.10, 0.3, 1.19, 0.0, 1.0])
+HI = np.array([0.80, 40.0, 0.25, 25.0, 0.10, 5.0, 1.20, 0.02, 60.0])
 
 
 def load_log(path):
@@ -74,7 +74,7 @@ class Robot:
         p.loadURDF(self.plane, physicsClientId=cid)
         self.robot = p.loadURDF(self.urdf, [0, 0, R + 0.001], physicsClientId=cid)
         p.changeDynamics(self.robot, 0, mass=0.650 * prm[6],
-                         localInertiaDiagonal=[0.002, 0.0015 * prm[5], 0.001], physicsClientId=cid)
+                         localInertiaDiagonal=[0.002, 0.0015 * prm[6] * prm[5], 0.001], physicsClientId=cid)
         self.jl = self.jr = -1
         for i in range(p.getNumJoints(self.robot, physicsClientId=cid)):
             n = p.getJointInfo(self.robot, i, physicsClientId=cid)[1].decode()
@@ -87,7 +87,7 @@ class Robot:
 
     def window(self, lg, i0, offset, prm):
         """行i0から WIN_ROWS 行を前向きシミュレートし (予測傾き, 予測車輪角) の軌跡を返す"""
-        KT, wmax, dead, delay_ms, *_ = prm
+        KT, wmax, dead, delay_ms, _oz, _is, _ms, damp, tau_ms = prm
         cid = self.cid
         th = lg["ang"][i0] + offset
         thd = lg["spd"][i0]
@@ -103,6 +103,9 @@ class Robot:
             idx = max(i0 + k, 0)
             cmd += [(lg["pl"][idx], lg["pr"][idx], lg["batt"][idx])] * SUBSTEPS_PER_ROW
         pred_th, pred_ph = [], []
+        sub_dt = DT_ROW / SUBSTEPS_PER_ROW
+        alpha = 1.0 - math.exp(-sub_dt / (tau_ms / 1000.0))  # モータ電気的一次遅れ
+        fl, fr = lg["pl"][max(i0 - 1, 0)], lg["pr"][max(i0 - 1, 0)]
         for k in range(WIN_ROWS):
             for s in range(SUBSTEPS_PER_ROW):
                 pl, pr, bt = cmd[3 * SUBSTEPS_PER_ROW + k * SUBSTEPS_PER_ROW + s - delay_sub]
@@ -110,13 +113,15 @@ class Robot:
                     pl = 0.0
                 if abs(pr) < dead:
                     pr = 0.0
+                fl += alpha * (pl - fl)
+                fr += alpha * (pr - fr)
                 kt = KT * max(0.4, bt / 7.5)
                 ls = p.getJointState(self.robot, self.jl, physicsClientId=cid)
                 rs = p.getJointState(self.robot, self.jr, physicsClientId=cid)
                 p.setJointMotorControl2(self.robot, self.jl, p.TORQUE_CONTROL,
-                                        force=kt * (pl - ls[1] / wmax), physicsClientId=cid)
+                                        force=kt * (fl - ls[1] / wmax) - damp * ls[1], physicsClientId=cid)
                 p.setJointMotorControl2(self.robot, self.jr, p.TORQUE_CONTROL,
-                                        force=kt * (pr - rs[1] / wmax), physicsClientId=cid)
+                                        force=kt * (fr - rs[1] / wmax) - damp * rs[1], physicsClientId=cid)
                 p.stepSimulation(physicsClientId=cid)
             _, o = p.getBasePositionAndOrientation(self.robot, physicsClientId=cid)
             pred_th.append(p.getEulerFromQuaternion(o)[1])

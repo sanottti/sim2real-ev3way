@@ -321,6 +321,17 @@ CALIB_MOTOR = False
 CALIB_TORQUE_SCALE = 0.0512 / 0.20   # 較正KT / Simのmax_torque*derate中心値
 CALIB_SPEED_SCALE = 22.6 / 17.8
 CALIB_DELAY_S = 0.022
+# ★2026-10-06: 実測質量838g(車輪2個0.06kg・base_link0.001kgを除いた車体=0.777kg)。
+#   Sim既定(0.650kg、乱数0.8〜1.2倍=0.52〜0.78)は実機より軽く、実測値が範囲外だった。
+#   重心・慣性は実測困難なため、実測できた質量は狭く固定し、重心・慣性は広めにランダム化してロバスト化する。
+CALIB_BODY = False
+CALIB_BODY_MASS = 0.777
+# ★2026-10-07: 「較正値を1点で信じず、安定していた範囲を中心に広くランダム化する」ロバスト学習モード。
+#   実機ログ較正(calib_motor.py、質量838g固定)でラウンド間でも安定していた値(KT≈0.11〜0.13、
+#   遅れ≈18〜25ms、時定数≈8〜11ms)を中心に、安定しなかった項目(無負荷回転数16〜27rad/s、
+#   慣性・重心)は広く振る。CALIB_BODY(実測質量+広い慣性・重心)・初期傾き±8°・
+#   モータ一次遅れ・不感帯0.05を同時に有効にする。--calib-robustで有効化。
+CALIB_ROBUST = False
 
 FIDELITY_FLAG_NAMES = [
     "FIDELITY_MOTOR_SPEED", "FIDELITY_GYRO_EST", "FIDELITY_OUTPUT_PATH",
@@ -390,6 +401,8 @@ class EV3WayEnv:
         self._battery_voltage_ep = params["battery_voltage"]
         self._voltage_torque_ratio = 1.0
         self._latency_steps_ep = 0
+        self._motor_tau_s      = 0.0
+        self._duty_l = self._duty_r = 0.0
         self._action_history   = [(0.0, 0.0)] * 3
         # ★2026-10-01(Phase 5準備): 押し外乱(人が手で押す想定)。
         #   force_epはNewton(符号付き、水平方向)、step_epは押しを開始する
@@ -410,6 +423,7 @@ class EV3WayEnv:
         self._deltas_l = [0.0]*4
         self._deltas_r = [0.0]*4
         self._loop = 0
+        self._duty_l = self._duty_r = 0.0
         # 2-2: ジャイロ積分推定器の内部状態(app.cのgyro_angle/gyro_offsetと同じ)
         self._gyro_angle_est = 0.0
         self._gyro_offset_ema = 0.0
@@ -441,7 +455,10 @@ class EV3WayEnv:
         p.loadURDF(self._plane(), physicsClientId=self.cid)
 
         if init_tilt_deg is None:
-            init_tilt_deg = 3.0 if force_worst else scaled_uniform(-3, 3)
+            if CALIB_ROBUST:
+                init_tilt_deg = 6.0 if force_worst else scaled_uniform(-8, 8)
+            else:
+                init_tilt_deg = 3.0 if force_worst else scaled_uniform(-3, 3)
         orn = p.getQuaternionFromEuler([0, math.radians(init_tilt_deg), 0])
 
         # ============================================================
@@ -454,6 +471,8 @@ class EV3WayEnv:
         ox_max = self.pr["com_offset_x"]
         oy_max = self.pr["com_offset_y"]
         oz_max = self.pr["com_offset_z"]
+        if CALIB_BODY or CALIB_ROBUST:
+            ox_max, oz_max = ox_max * 2.0, oz_max * 2.0   # 重心は実測困難のため幅を2倍に
         if force_worst:
             com_ox, com_oy, com_oz = ox_max, 0.0, oz_max
         else:
@@ -495,14 +514,18 @@ class EV3WayEnv:
             if n == "right_wheel_joint": self.jr = i
 
         body_link_idx = 0
-        base_mass = 0.650
-        base_iyy  = 0.0015
+        base_mass = CALIB_BODY_MASS if (CALIB_BODY or CALIB_ROBUST) else 0.650
+        base_iyy  = 0.0015 * (base_mass / 0.650)
 
         if force_worst:
             mass_scale, inertia_scale, fric_scale = 1.2, 1.3, 0.5
         else:
-            mass_scale   = scaled_uniform(0.8, 1.2)
-            inertia_scale= scaled_uniform(0.7, 1.3)
+            if CALIB_BODY or CALIB_ROBUST:
+                mass_scale   = scaled_uniform(0.95, 1.05)
+                inertia_scale= scaled_uniform(0.7, 3.5) if CALIB_ROBUST else scaled_uniform(0.5, 2.0)
+            else:
+                mass_scale   = scaled_uniform(0.8, 1.2)
+                inertia_scale= scaled_uniform(0.7, 1.3)
             fric_scale   = scaled_uniform(0.5, 1.4)
 
         p.changeDynamics(self.robot, body_link_idx,
@@ -548,6 +571,20 @@ class EV3WayEnv:
             self._max_torque_ep *= CALIB_TORQUE_SCALE
             self._max_speed_ep *= CALIB_SPEED_SCALE
             self._latency_steps_ep = int(round(CALIB_DELAY_S / effective_ctrl_dt()))
+        self._motor_tau_s = 0.0
+        if CALIB_ROBUST:
+            self._max_torque_ep = self.pr["max_torque"]
+            if force_worst:
+                self._torque_derate_ep = 0.20        # KT=0.08(弱い側の端)
+                self._max_speed_ep     = 16.0
+                delay_ms, tau_ms       = 25.0, 12.0
+            else:
+                self._torque_derate_ep = scaled_uniform(0.20, 0.43)   # KT=0.08〜0.17
+                self._max_speed_ep     = scaled_uniform(16.0, 26.0)
+                delay_ms               = scaled_uniform(15.0, 25.0)
+                tau_ms                 = scaled_uniform(5.0, 12.0)
+            self._latency_steps_ep = int(round(delay_ms / 1000.0 / effective_ctrl_dt()))
+            self._motor_tau_s = tau_ms / 1000.0
 
         # ★2026-10-01(Phase 5準備): 押し外乱(人が手で押す想定)。
         #   PUSH_FORCE_MAX(Newton)を上限に、エピソード中ランダムな
@@ -672,11 +709,11 @@ class EV3WayEnv:
         self._action_history.append((pl, pr))
         delay = self._latency_steps_ep
         pl_eff, pr_eff = self._action_history[-1-delay] if delay < len(self._action_history) else (0.0,0.0)
-        self._action_history = self._action_history[-(16 if CALIB_MOTOR else 3):]
+        self._action_history = self._action_history[-(16 if (CALIB_MOTOR or CALIB_ROBUST) else 3):]
 
         if FIDELITY_QUANTIZATION:
             # 2-6: 実機モータの不感帯。小さいduty指令では回転しない。
-            deadband = self.pr["motor_deadband"]
+            deadband = 0.05 if CALIB_ROBUST else self.pr["motor_deadband"]
             if abs(pl_eff) < deadband:
                 pl_eff = 0.0
             if abs(pr_eff) < deadband:
@@ -692,11 +729,20 @@ class EV3WayEnv:
         push_active = (self._push_step_ep >= 0
                        and self._push_step_ep <= self._loop < self._push_step_ep + push_duration_steps)
 
+        _tau = self._motor_tau_s
+        _alpha = 1.0 - math.exp(-(effective_ctrl_dt() / 4.0) / _tau) if _tau > 0 else 1.0
         for _ in range(4):
             ls = p.getJointState(self.robot, self.jl, physicsClientId=self.cid)
             rs = p.getJointState(self.robot, self.jr, physicsClientId=self.cid)
-            tl = eff_torque*(pl_eff - ls[1]/self._max_speed_ep)
-            tr = eff_torque*(pr_eff - rs[1]/self._max_speed_ep)
+            if _alpha < 1.0:
+                # モータ電気的一次遅れ(CALIB_ROBUST時のみ)。duty指令に対し実効dutyが遅れて追従する
+                self._duty_l += _alpha * (pl_eff - self._duty_l)
+                self._duty_r += _alpha * (pr_eff - self._duty_r)
+                cmd_l, cmd_r = self._duty_l, self._duty_r
+            else:
+                cmd_l, cmd_r = pl_eff, pr_eff
+            tl = eff_torque*(cmd_l - ls[1]/self._max_speed_ep)
+            tr = eff_torque*(cmd_r - rs[1]/self._max_speed_ep)
             p.setJointMotorControl2(self.robot, self.jl, p.TORQUE_CONTROL,
                                      force=tl, physicsClientId=self.cid)
             p.setJointMotorControl2(self.robot, self.jr, p.TORQUE_CONTROL,
@@ -934,18 +980,19 @@ _worker_env = None
 
 
 def _init_worker(weight_ball=False, legacy_reward=False, fidelity_flags=None, train_max_steps=None,
-                  push_force_max=0.0):
+                  push_force_max=0.0, calib_robust=False):
     # ★2026-09-26: multiprocessing(spawn)はworkerプロセスでモジュールを
     #   再importするため、親プロセスでWEIGHT_BALL_ENABLED/LEGACY_REWARD_ENABLED
     #   をTrueにしてもworkerには自動で伝わらない。initargs経由で明示的に渡す。
     #   ★2026-09-29: Phase 2のFIDELITY_*フラグも同じ理由でinitargs経由にする。
     #   ★2026-09-30: --train-secondsによるTRAIN_MAX_STEPS上書きも同様。
     #   ★2026-10-01: PUSH_FORCE_MAXも同様。
-    global _worker_env, LEGACY_REWARD_ENABLED, TRAIN_MAX_STEPS, PUSH_FORCE_MAX
+    global _worker_env, LEGACY_REWARD_ENABLED, TRAIN_MAX_STEPS, PUSH_FORCE_MAX, CALIB_ROBUST
     global FIDELITY_MOTOR_SPEED, FIDELITY_GYRO_EST, FIDELITY_OUTPUT_PATH, FIDELITY_CTRL_RATE
     global FIDELITY_FALL_ANGLE, FIDELITY_QUANTIZATION, FIDELITY_STARTUP_DEADTIME, FIDELITY_BATTERY_SAG
     LEGACY_REWARD_ENABLED = legacy_reward
     PUSH_FORCE_MAX = push_force_max
+    CALIB_ROBUST = calib_robust
     if train_max_steps is not None:
         TRAIN_MAX_STEPS = train_max_steps
     if fidelity_flags:
@@ -1342,13 +1389,16 @@ def parse_args():
                           "タイミング(0.5〜2.0秒)・向きで0.1秒間力を加える。"
                           "力の大きさは未実測のengineering estimateであり、"
                           "小さい値から始めてカリキュラム的に引き上げることを推奨")
+    ap.add_argument("--calib-robust", action="store_true",
+                     help="実機ログ較正に基づくロバスト化Sim(2026-10-07)。実測質量838g・広い慣性/重心・"
+                          "モータトルク/遅れ/時定数の範囲ランダム化・初期傾き±8°を有効化する")
     return ap.parse_args()
 
 
 def main():
     args = parse_args()
 
-    global WEIGHT_BALL_ENABLED, LEGACY_REWARD_ENABLED, TRAIN_MAX_STEPS, PUSH_FORCE_MAX
+    global WEIGHT_BALL_ENABLED, LEGACY_REWARD_ENABLED, TRAIN_MAX_STEPS, PUSH_FORCE_MAX, CALIB_ROBUST
     global FIDELITY_MOTOR_SPEED, FIDELITY_GYRO_EST, FIDELITY_OUTPUT_PATH, FIDELITY_CTRL_RATE
     global FIDELITY_FALL_ANGLE, FIDELITY_QUANTIZATION, FIDELITY_STARTUP_DEADTIME, FIDELITY_BATTERY_SAG
     PUSH_FORCE_MAX = args.max_push_force
@@ -1359,6 +1409,9 @@ def main():
         print(f"★学習中の評価エピソード長を{args.train_seconds:.1f}秒"
               f"(TRAIN_MAX_STEPS={TRAIN_MAX_STEPS})に変更します。", flush=True)
     WEIGHT_BALL_ENABLED = args.weight_ball
+    CALIB_ROBUST = args.calib_robust
+    if CALIB_ROBUST:
+        print("★較正ロバスト化Sim(CALIB_ROBUST)を有効化: 実測質量・広い慣性/重心・モータ範囲・一次遅れ・初期傾き±8°", flush=True)
     LEGACY_REWARD_ENABLED = args.legacy_reward
     if args.weight_ball:
         print("★提案#5(オモリ玉ランダム化)を有効化して学習します。", flush=True)
@@ -1424,7 +1477,7 @@ def main():
     if args.workers > 1:
         pool = mp.Pool(processes=args.workers, initializer=_init_worker,
                         initargs=(args.weight_ball, args.legacy_reward, _fidelity_dict, TRAIN_MAX_STEPS,
-                                  PUSH_FORCE_MAX))
+                                  PUSH_FORCE_MAX, CALIB_ROBUST))
         print(f"並列評価を有効化: worker数={args.workers}", flush=True)
 
     # ★2026-09-25(F): evaluate()がステップ正規化された平均報酬(概ね0〜1)を

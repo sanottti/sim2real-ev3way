@@ -35,9 +35,16 @@ def main():
     args = ap.parse_args()
     for f in sim.FIDELITY_FLAG_NAMES:
         setattr(sim, f, True)
-    for calib in (False, True):
-        sim.CALIB_MOTOR = calib
-        print(f"\n=== CALIB_MOTOR={calib} (fidelity-all) ===")
+    # 質量固定較正(ラウンド0)の値: KT=0.1094, wmax=18.55, deadband=0.042, delay=17.8ms
+    import sys
+    configs = [("なし", dict(m=False, b=False)), ("CALIB_ROBUST", dict(m=False, b=False, r=True))]
+    for label, c in configs:
+        sim.CALIB_MOTOR, sim.CALIB_BODY = c["m"], c["b"]
+        sim.CALIB_ROBUST = c.get("r", False)
+        if "ts" in c:
+            sim.CALIB_TORQUE_SCALE, sim.CALIB_SPEED_SCALE, sim.CALIB_DELAY_S = c["ts"], c["ss"], c["dl"]
+            sim.PARAMS["motor_deadband"] = c["db"]
+        print(f"\n=== {label} (fidelity-all) ===")
         print("ver | Sim生存[s] 中央値 | 飽和率[%] | |PWM|平均 || 実機: 生存[s] 飽和率 |PWM|")
         for v, d in VERSIONS.items():
             w1, w2 = np.load(f"{d}/ev3way_w1.npy"), np.load(f"{d}/ev3way_w2.npy")
