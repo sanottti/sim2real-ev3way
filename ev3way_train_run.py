@@ -333,6 +333,13 @@ CALIB_BODY_MASS = 0.777
 #   モータ一次遅れ・不感帯0.05を同時に有効にする。--calib-robustで有効化。
 CALIB_ROBUST = False
 
+# ★2026-10-07: PWM飽和ペナルティ。実機ではSim生存時間よりPWM飽和率(|pwm|>=95の割合)が
+#   性能をよく予測した(v7 2.0%=最良、v15 41.1%=最悪)。ロバストSim再学習Stage1で生存時間は
+#   約2.4倍に伸びたが飽和率が30〜37%に悪化(「全力で叩く制御」)したため、デューティ絶対値が
+#   0.6を超えた分を二乗で罰する。係数SAT_PENALTY_Wは--sat-penaltyで指定(0.0=無効、既存の全実験と互換)。
+SAT_PENALTY_W = 0.0
+SAT_PENALTY_START = 0.6
+
 FIDELITY_FLAG_NAMES = [
     "FIDELITY_MOTOR_SPEED", "FIDELITY_GYRO_EST", "FIDELITY_OUTPUT_PATH",
     "FIDELITY_CTRL_RATE", "FIDELITY_FALL_ANGLE", "FIDELITY_QUANTIZATION",
@@ -761,6 +768,11 @@ class EV3WayEnv:
         r = 1.0
         r -= 20.0 * pitch**2
         r -= 0.01*(pl**2+pr**2)
+        if SAT_PENALTY_W > 0.0:
+            for _u in (pl, pr):
+                _ex = (abs(_u) - SAT_PENALTY_START) / (1.0 - SAT_PENALTY_START)
+                if _ex > 0.0:
+                    r -= 0.5 * SAT_PENALTY_W * _ex * _ex
         # ★2026-09-30(Phase 4で発覚): この速度ペナルティは元々
         #   `0.02*(obs[4]**2+obs[5]**2)`(生のrad/s値の二乗)だった。これは
         #   max_speed=115rad/s(過大)だった旧Simの下で暗黙に校正された値で、
@@ -980,19 +992,20 @@ _worker_env = None
 
 
 def _init_worker(weight_ball=False, legacy_reward=False, fidelity_flags=None, train_max_steps=None,
-                  push_force_max=0.0, calib_robust=False):
+                  push_force_max=0.0, calib_robust=False, sat_penalty=0.0):
     # ★2026-09-26: multiprocessing(spawn)はworkerプロセスでモジュールを
     #   再importするため、親プロセスでWEIGHT_BALL_ENABLED/LEGACY_REWARD_ENABLED
     #   をTrueにしてもworkerには自動で伝わらない。initargs経由で明示的に渡す。
     #   ★2026-09-29: Phase 2のFIDELITY_*フラグも同じ理由でinitargs経由にする。
     #   ★2026-09-30: --train-secondsによるTRAIN_MAX_STEPS上書きも同様。
     #   ★2026-10-01: PUSH_FORCE_MAXも同様。
-    global _worker_env, LEGACY_REWARD_ENABLED, TRAIN_MAX_STEPS, PUSH_FORCE_MAX, CALIB_ROBUST
+    global _worker_env, LEGACY_REWARD_ENABLED, TRAIN_MAX_STEPS, PUSH_FORCE_MAX, CALIB_ROBUST, SAT_PENALTY_W
     global FIDELITY_MOTOR_SPEED, FIDELITY_GYRO_EST, FIDELITY_OUTPUT_PATH, FIDELITY_CTRL_RATE
     global FIDELITY_FALL_ANGLE, FIDELITY_QUANTIZATION, FIDELITY_STARTUP_DEADTIME, FIDELITY_BATTERY_SAG
     LEGACY_REWARD_ENABLED = legacy_reward
     PUSH_FORCE_MAX = push_force_max
     CALIB_ROBUST = calib_robust
+    SAT_PENALTY_W = sat_penalty
     if train_max_steps is not None:
         TRAIN_MAX_STEPS = train_max_steps
     if fidelity_flags:
@@ -1392,13 +1405,16 @@ def parse_args():
     ap.add_argument("--calib-robust", action="store_true",
                      help="実機ログ較正に基づくロバスト化Sim(2026-10-07)。実測質量838g・広い慣性/重心・"
                           "モータトルク/遅れ/時定数の範囲ランダム化・初期傾き±8°を有効化する")
+    ap.add_argument("--sat-penalty", type=float, default=0.0,
+                     help="PWM飽和ペナルティの係数(2026-10-07導入)。0.0なら無効。デューティ|u|が0.6を超えた分を"
+                          "二乗で罰し、実機で悪かった「全力で叩く制御」を抑える")
     return ap.parse_args()
 
 
 def main():
     args = parse_args()
 
-    global WEIGHT_BALL_ENABLED, LEGACY_REWARD_ENABLED, TRAIN_MAX_STEPS, PUSH_FORCE_MAX, CALIB_ROBUST
+    global WEIGHT_BALL_ENABLED, LEGACY_REWARD_ENABLED, TRAIN_MAX_STEPS, PUSH_FORCE_MAX, CALIB_ROBUST, SAT_PENALTY_W
     global FIDELITY_MOTOR_SPEED, FIDELITY_GYRO_EST, FIDELITY_OUTPUT_PATH, FIDELITY_CTRL_RATE
     global FIDELITY_FALL_ANGLE, FIDELITY_QUANTIZATION, FIDELITY_STARTUP_DEADTIME, FIDELITY_BATTERY_SAG
     PUSH_FORCE_MAX = args.max_push_force
@@ -1410,6 +1426,9 @@ def main():
               f"(TRAIN_MAX_STEPS={TRAIN_MAX_STEPS})に変更します。", flush=True)
     WEIGHT_BALL_ENABLED = args.weight_ball
     CALIB_ROBUST = args.calib_robust
+    SAT_PENALTY_W = args.sat_penalty
+    if SAT_PENALTY_W > 0:
+        print(f"★PWM飽和ペナルティを有効化(係数{SAT_PENALTY_W}、デューティ|u|>{SAT_PENALTY_START}から二乗)", flush=True)
     if CALIB_ROBUST:
         print("★較正ロバスト化Sim(CALIB_ROBUST)を有効化: 実測質量・広い慣性/重心・モータ範囲・一次遅れ・初期傾き±8°", flush=True)
     LEGACY_REWARD_ENABLED = args.legacy_reward
@@ -1477,7 +1496,7 @@ def main():
     if args.workers > 1:
         pool = mp.Pool(processes=args.workers, initializer=_init_worker,
                         initargs=(args.weight_ball, args.legacy_reward, _fidelity_dict, TRAIN_MAX_STEPS,
-                                  PUSH_FORCE_MAX, CALIB_ROBUST))
+                                  PUSH_FORCE_MAX, CALIB_ROBUST, SAT_PENALTY_W))
         print(f"並列評価を有効化: worker数={args.workers}", flush=True)
 
     # ★2026-09-25(F): evaluate()がステップ正規化された平均報酬(概ね0〜1)を
