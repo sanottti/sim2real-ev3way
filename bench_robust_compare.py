@@ -9,6 +9,8 @@ W = {
     "v16(元)": ("known_good/p5_stage3_push_20261001/ev3way_w1.npy", "known_good/p5_stage3_push_20261001/ev3way_w2.npy"),
     "rob_v7": ("ev3way_w1_rob_v7.npy", "ev3way_w2_rob_v7.npy"),
     "rob_v16": ("ev3way_w1_rob_v16.npy", "ev3way_w2_rob_v16.npy"),
+    "nd_v7": ("ev3way_w1_nd_v7.npy", "ev3way_w2_nd_v7.npy"),
+    "nd_v16": ("ev3way_w1_nd_v16.npy", "ev3way_w2_nd_v16.npy"),
     "rob2_v7(pen)": ("ev3way_w1_rob2_v7.npy", "ev3way_w2_rob2_v7.npy"),
     "rob3_v7(nopen)": ("ev3way_w1_rob3_v7.npy", "ev3way_w2_rob3_v7.npy"),
 }

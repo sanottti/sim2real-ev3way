@@ -1386,6 +1386,8 @@ def parse_args():
     ap.add_argument("--fidelity-startup-deadtime", action="store_true",
                      help="Phase 2-7: app.cの起動時デッドタイム(尻尾トルク解除〜"
                           "制御ループ開始まで無制御で傾き始める区間)を再現する")
+    ap.add_argument("--no-startup-deadtime", action="store_true",
+                     help="--fidelity-all使用時も起動時デッドタイムだけ無効にする(実機ログは制御がt=0から動くため)")
     ap.add_argument("--fidelity-battery-sag", action="store_true",
                      help="Phase 2-8: 直前ステップの出力負荷に応じてobs[6]の"
                           "電池電圧が下がる簡易サグモデルを有効化する")
@@ -1445,6 +1447,8 @@ def main():
     FIDELITY_QUANTIZATION     = args.fidelity_all or args.fidelity_quantization
     FIDELITY_STARTUP_DEADTIME = args.fidelity_all or args.fidelity_startup_deadtime
     FIDELITY_BATTERY_SAG      = args.fidelity_all or args.fidelity_battery_sag
+    if args.no_startup_deadtime:
+        FIDELITY_STARTUP_DEADTIME = False
     _fidelity_dict = {name: globals()[name] for name in FIDELITY_FLAG_NAMES}
     _active_fidelity = [name for name, v in _fidelity_dict.items() if v]
     if _active_fidelity:
