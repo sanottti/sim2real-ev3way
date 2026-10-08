@@ -340,6 +340,16 @@ CALIB_ROBUST = False
 SAT_PENALTY_W = 0.0
 SAT_PENALTY_START = 0.6
 
+# ★2026-10-09: 実機ログ解析(v16/v17)で見つかった差をSim側で調整できるようにするオプション群。
+#   既定値は従来挙動(--calib-robust時のcom幅2倍を含む)と同一。workerへはinitargs経由で渡す。
+#   real_ctrl_dt_s: FIDELITY_CTRL_RATE時の制御周期。実機は5ms待ち+処理で5.34ms(ログ9本で確認)。None=5ms
+#   init_tilt_bias_deg: 初期傾きの平均値のずれ。尻尾で立てた時の傾きなど、実機の開始姿勢が非対称な場合に使う
+#   com_width_scale: --calib-robust/--calib-body時の重心オフセット(x,z)幅の倍率
+#   smooth_penalty_w: 出力の急変(前ステップとの差の二乗)へのペナルティ係数。0=無効(チャタリング抑制用)
+SIM_OPTS = {"real_ctrl_dt_s": None, "init_tilt_bias_deg": 0.0, "com_width_scale": 2.0,
+            "smooth_penalty_w": 0.0}
+HISTORY_LEN = 16   # 遅れバッファの長さ(遅れの最大ステップ数より十分大きいこと)
+
 FIDELITY_FLAG_NAMES = [
     "FIDELITY_MOTOR_SPEED", "FIDELITY_GYRO_EST", "FIDELITY_OUTPUT_PATH",
     "FIDELITY_CTRL_RATE", "FIDELITY_FALL_ANGLE", "FIDELITY_QUANTIZATION",
@@ -356,7 +366,9 @@ FALL_ANGLE_DEG_REALISTIC = 45.0
 
 def effective_ctrl_dt():
     """FIDELITY_CTRL_RATE有効時は5ms、無効時はPARAMS["ctrl_dt"](10ms)を返す"""
-    return 0.005 if FIDELITY_CTRL_RATE else PARAMS["ctrl_dt"]
+    if FIDELITY_CTRL_RATE:
+        return SIM_OPTS["real_ctrl_dt_s"] or 0.005
+    return PARAMS["ctrl_dt"]
 
 
 def effective_steps(base_steps, base_dt=0.010):
@@ -410,7 +422,7 @@ class EV3WayEnv:
         self._latency_steps_ep = 0
         self._motor_tau_s      = 0.0
         self._duty_l = self._duty_r = 0.0
-        self._action_history   = [(0.0, 0.0)] * 3
+        self._action_history   = [(0.0, 0.0)] * HISTORY_LEN
         # ★2026-10-01(Phase 5準備): 押し外乱(人が手で押す想定)。
         #   force_epはNewton(符号付き、水平方向)、step_epは押しを開始する
         #   制御ループ回数(-1は無効)。reset()で毎エピソード設定する。
@@ -436,6 +448,7 @@ class EV3WayEnv:
         self._gyro_offset_ema = 0.0
         # 2-8: 直前ステップの出力duty絶対値平均(電池サグのモデルに使う)
         self._last_output_mag = 0.0
+        self._prev_cmd = (0.0, 0.0)
 
     def reset(self, seed, init_tilt_deg=None, difficulty=1.0):
         # ★2026-09-25(B): カリキュラム型ドメインランダム化。difficulty(0〜1)で
@@ -463,9 +476,9 @@ class EV3WayEnv:
 
         if init_tilt_deg is None:
             if CALIB_ROBUST:
-                init_tilt_deg = 6.0 if force_worst else scaled_uniform(-8, 8)
+                init_tilt_deg = 6.0 if force_worst else scaled_uniform(-8, 8) + SIM_OPTS["init_tilt_bias_deg"]
             else:
-                init_tilt_deg = 3.0 if force_worst else scaled_uniform(-3, 3)
+                init_tilt_deg = 3.0 if force_worst else scaled_uniform(-3, 3) + SIM_OPTS["init_tilt_bias_deg"]
         orn = p.getQuaternionFromEuler([0, math.radians(init_tilt_deg), 0])
 
         # ============================================================
@@ -479,13 +492,15 @@ class EV3WayEnv:
         oy_max = self.pr["com_offset_y"]
         oz_max = self.pr["com_offset_z"]
         if CALIB_BODY or CALIB_ROBUST:
-            ox_max, oz_max = ox_max * 2.0, oz_max * 2.0   # 重心は実測困難のため幅を2倍に
+            ox_max, oz_max = ox_max * SIM_OPTS["com_width_scale"], oz_max * SIM_OPTS["com_width_scale"]   # 重心は実測困難のため幅を広げる(既定2倍)
         if force_worst:
             com_ox, com_oy, com_oz = ox_max, 0.0, oz_max
         else:
             com_ox = scaled_uniform(-ox_max, ox_max)
             com_oy = scaled_uniform(-oy_max, oy_max)
             com_oz = scaled_uniform(-oz_max, oz_max)
+
+        self._com_offsets_ep = (com_ox, com_oy, com_oz)
 
         if self.weight_ball:
             # ★2026-09-26(提案#5): オモリ玉の位置・質量をランダム化(または
@@ -610,7 +625,8 @@ class EV3WayEnv:
             self._push_force_ep = 0.0
             self._push_step_ep = -1
 
-        self._action_history = [(0.0, 0.0)] * 3
+        self._action_history = [(0.0, 0.0)] * HISTORY_LEN
+        self._prev_cmd = (0.0, 0.0)
 
         self._reset_state()
 
@@ -716,7 +732,7 @@ class EV3WayEnv:
         self._action_history.append((pl, pr))
         delay = self._latency_steps_ep
         pl_eff, pr_eff = self._action_history[-1-delay] if delay < len(self._action_history) else (0.0,0.0)
-        self._action_history = self._action_history[-(16 if (CALIB_MOTOR or CALIB_ROBUST) else 3):]
+        self._action_history = self._action_history[-HISTORY_LEN:]
 
         if FIDELITY_QUANTIZATION:
             # 2-6: 実機モータの不感帯。小さいduty指令では回転しない。
@@ -768,6 +784,9 @@ class EV3WayEnv:
         r = 1.0
         r -= 20.0 * pitch**2
         r -= 0.01*(pl**2+pr**2)
+        if SIM_OPTS["smooth_penalty_w"] > 0.0:
+            r -= SIM_OPTS["smooth_penalty_w"] * 0.5 * ((pl - self._prev_cmd[0]) ** 2 + (pr - self._prev_cmd[1]) ** 2)
+        self._prev_cmd = (pl, pr)
         if SAT_PENALTY_W > 0.0:
             for _u in (pl, pr):
                 _ex = (abs(_u) - SAT_PENALTY_START) / (1.0 - SAT_PENALTY_START)
@@ -992,7 +1011,7 @@ _worker_env = None
 
 
 def _init_worker(weight_ball=False, legacy_reward=False, fidelity_flags=None, train_max_steps=None,
-                  push_force_max=0.0, calib_robust=False, sat_penalty=0.0):
+                  push_force_max=0.0, calib_robust=False, sat_penalty=0.0, sim_opts=None):
     # ★2026-09-26: multiprocessing(spawn)はworkerプロセスでモジュールを
     #   再importするため、親プロセスでWEIGHT_BALL_ENABLED/LEGACY_REWARD_ENABLED
     #   をTrueにしてもworkerには自動で伝わらない。initargs経由で明示的に渡す。
@@ -1006,6 +1025,8 @@ def _init_worker(weight_ball=False, legacy_reward=False, fidelity_flags=None, tr
     PUSH_FORCE_MAX = push_force_max
     CALIB_ROBUST = calib_robust
     SAT_PENALTY_W = sat_penalty
+    if sim_opts:
+        SIM_OPTS.update(sim_opts)
     if train_max_steps is not None:
         TRAIN_MAX_STEPS = train_max_steps
     if fidelity_flags:
@@ -1410,6 +1431,14 @@ def parse_args():
     ap.add_argument("--sat-penalty", type=float, default=0.0,
                      help="PWM飽和ペナルティの係数(2026-10-07導入)。0.0なら無効。デューティ|u|が0.6を超えた分を"
                           "二乗で罰し、実機で悪かった「全力で叩く制御」を抑える")
+    ap.add_argument("--real-ctrl-dt-ms", type=float, default=0.0,
+                     help="--fidelity-ctrl-rate時の制御周期[ms](2026-10-09)。実機ログ9本の実測は5.34ms。0なら従来の5ms")
+    ap.add_argument("--init-tilt-bias-deg", type=float, default=0.0,
+                     help="初期傾きの平均値のずれ[deg](2026-10-09)。尻尾で立てた時の傾きなど実機の開始姿勢が非対称な場合に使う")
+    ap.add_argument("--com-width-scale", type=float, default=2.0,
+                     help="--calib-robust/--calib-body時の重心オフセット(x,z)幅の倍率(既定2.0=従来通り)")
+    ap.add_argument("--smooth-penalty", type=float, default=0.0,
+                     help="出力の急変(前ステップとの差の二乗)へのペナルティ係数(2026-10-09)。0なら無効。チャタリング抑制用")
     return ap.parse_args()
 
 
@@ -1429,6 +1458,10 @@ def main():
     WEIGHT_BALL_ENABLED = args.weight_ball
     CALIB_ROBUST = args.calib_robust
     SAT_PENALTY_W = args.sat_penalty
+    SIM_OPTS.update(real_ctrl_dt_s=(args.real_ctrl_dt_ms / 1000.0 if args.real_ctrl_dt_ms > 0 else None),
+                    init_tilt_bias_deg=args.init_tilt_bias_deg, com_width_scale=args.com_width_scale,
+                    smooth_penalty_w=args.smooth_penalty)
+    print(f"★Simオプション(2026-10-09): {SIM_OPTS}", flush=True)
     if SAT_PENALTY_W > 0:
         print(f"★PWM飽和ペナルティを有効化(係数{SAT_PENALTY_W}、デューティ|u|>{SAT_PENALTY_START}から二乗)", flush=True)
     if CALIB_ROBUST:
@@ -1500,7 +1533,7 @@ def main():
     if args.workers > 1:
         pool = mp.Pool(processes=args.workers, initializer=_init_worker,
                         initargs=(args.weight_ball, args.legacy_reward, _fidelity_dict, TRAIN_MAX_STEPS,
-                                  PUSH_FORCE_MAX, CALIB_ROBUST, SAT_PENALTY_W))
+                                  PUSH_FORCE_MAX, CALIB_ROBUST, SAT_PENALTY_W, dict(SIM_OPTS)))
         print(f"並列評価を有効化: worker数={args.workers}", flush=True)
 
     # ★2026-09-25(F): evaluate()がステップ正規化された平均報酬(概ね0〜1)を

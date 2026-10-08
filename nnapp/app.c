@@ -83,6 +83,13 @@ static const int gyro_sensor=EV3_PORT_4, left_motor=EV3_PORT_C,
 #define OUTPUT_GAIN 1.5f
 
 #define LOG_DECIM 2
+
+/* ★ 制御周期dtの計算方法(2026-10-09)。
+ *   従来は (now-prev)/1000U でミリ秒に切り捨ててから秒に直していたため、実周期5.34msが
+ *   常に5msになり、傾き積分が約6.4%小さく・車輪速度が約6.8%大きく見えていた(v16/v17ログ9本で確認)。
+ *   1: マイクロ秒のまま秒に直す(正確)。新しいSim(--fidelity-ctrl-rate --real-ctrl-dt-ms 5.34)で
+ *      学習した重み用。0: 従来の切り捨て(v17以前の重みの挙動を変えない)。 */
+#define USE_EXACT_DT 0   /* 現在のv17重みは切り捨てdtで学習・実機検証済みのため0。新しいSimで学習した重み(v18以降)に載せ替える時に1にする */
 #define LOG_CAPACITY 5000
 
 /* ============================================================
@@ -151,6 +158,8 @@ static void nn_forward(const float obs[7], float action[2]){
 typedef struct {
     uint32_t t_ms;
     int16_t  gyro_raw, gyro_spd_x10, gyro_ang_x10;
+    int16_t  gyro_spd_mrad, gyro_ang_mrad;   /* 2026-10-09: 0.1rad刻みでは粗いため追加(mrad) */
+    uint16_t dt_us;                          /* 2026-10-09: 直前ループの実周期[us] */
     int32_t  cnt_l, cnt_r;
     uint16_t batt_mV;
     int8_t   pwm_l, pwm_r;
@@ -199,7 +208,7 @@ static void make_log_filename(void){
         FILE*fp=fopen(nm,"r");if(!fp)break;fclose(fp);n++;}
     sprintf(log_filename,"nn_%s_%03d.csv",NN_VERSION,n);
 }
-static void log_sample(int loop,float g_ang,float g_spd,int raw,int pl,int pr){
+static void log_sample(int loop,float g_ang,float g_spd,int raw,int pl,int pr,float dt){
     if((loop%LOG_DECIM)!=0)return;
     if(log_n>=LOG_CAPACITY){stop_req=true;return;}
     SYSTIM now;get_tim(&now);
@@ -207,6 +216,8 @@ static void log_sample(int loop,float g_ang,float g_spd,int raw,int pl,int pr){
     r->t_ms=(uint32_t)((now-run_start_time)/1000U);
     r->gyro_raw=(int16_t)raw;r->gyro_spd_x10=(int16_t)(g_spd*10.0f);
     r->gyro_ang_x10=(int16_t)(g_ang*10.0f);
+    r->gyro_spd_mrad=(int16_t)(g_spd*1000.0f);r->gyro_ang_mrad=(int16_t)(g_ang*1000.0f);
+    r->dt_us=(uint16_t)(dt*1000000.0f);
     r->cnt_l=ev3_motor_get_counts(left_motor);r->cnt_r=ev3_motor_get_counts(right_motor);
     r->batt_mV=(uint16_t)ev3_battery_voltage_mV();
     r->pwm_l=(int8_t)pl;r->pwm_r=(int8_t)pr;
@@ -220,12 +231,13 @@ static void write_csv(void){
     fprintf(fp,"# nn_weights_version=%s\n",NN_VERSION);
     fprintf(fp,"# gyro_ofs_mdps=%d\n",(int)(gyro_offset_val*1000));
     fprintf(fp,"# wait_ms=%d,decim=%d,samples=%d\n",WAIT_TIME_MS,LOG_DECIM,(int)log_n);
-    fprintf(fp,"t_ms,gyro_raw,gyro_spd_x10,gyro_ang_x10,cnt_l,cnt_r,batt_mV,pwm_l,pwm_r\n");
+    fprintf(fp,"t_ms,gyro_raw,gyro_spd_x10,gyro_ang_x10,cnt_l,cnt_r,batt_mV,pwm_l,pwm_r,gyro_spd_mrad,gyro_ang_mrad,dt_us\n");
     for(uint32_t i=0;i<log_n;i++){
         log_rec_t*r=&log_buf[i];
-        fprintf(fp,"%d,%d,%d,%d,%d,%d,%d,%d,%d\n",(int)r->t_ms,(int)r->gyro_raw,
+        fprintf(fp,"%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",(int)r->t_ms,(int)r->gyro_raw,
             (int)r->gyro_spd_x10,(int)r->gyro_ang_x10,(int)r->cnt_l,(int)r->cnt_r,
-            (int)r->batt_mV,(int)r->pwm_l,(int)r->pwm_r);
+            (int)r->batt_mV,(int)r->pwm_l,(int)r->pwm_r,
+            (int)r->gyro_spd_mrad,(int)r->gyro_ang_mrad,(int)r->dt_us);
     }
     fclose(fp);
     char m[24];sprintf(m,"DONE %d pts  ",(int)log_n);ev3_lcd_draw_string(m,0,72);
@@ -262,7 +274,11 @@ void balance_task(intptr_t unused){
 
     while(1){
         SYSTIM now;get_tim(&now);
+#if USE_EXACT_DT
+        float dt=(float)(now-prev)/1000000.0f;
+#else
         float dt=(float)((now-prev)/1000U)/1000.0f;
+#endif
         if(dt<0.001f)dt=0.005f;prev=now;
 
         int raw=ev3_gyro_sensor_get_rate(gyro_sensor);
@@ -298,7 +314,7 @@ void balance_task(intptr_t unused){
         if(pr>100)pr=100;if(pr<-100)pr=-100;
         ev3_motor_set_power(left_motor,pl);ev3_motor_set_power(right_motor,pr);
 
-        log_sample(loop,gyro_angle,g_spd,raw,pl,pr);
+        log_sample(loop,gyro_angle,g_spd,raw,pl,pr,dt);
 
         if(gyro_angle>FALL_ANGLE_DEG*DEG2RAD||gyro_angle<-FALL_ANGLE_DEG*DEG2RAD){
             ev3_motor_stop(left_motor,false);ev3_motor_stop(right_motor,false);
