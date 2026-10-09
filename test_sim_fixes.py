@@ -138,7 +138,32 @@ def test_appc():
     check(call.endswith(",dt)"), "app.c: log_sampleにdtを渡している")
 
 
+def test_inputs():
+    for f in sim.FIDELITY_FLAG_NAMES:
+        setattr(sim, f, True)
+    for prev, batt, idx in ((False, True, [0, 1, 2, 3, 4, 5, 6]), (True, True, [0, 1, 2, 3, 4, 5, 6, 7]),
+                            (True, False, [0, 1, 2, 3, 4, 5, 7]), (False, False, [0, 1, 2, 3, 4, 5])):
+        sim.configure_inputs(prev, batt)
+        check(sim.INPUT_IDX == idx and sim.N_OBS == len(idx) and sim.N_PARAMS == len(idx) * 16 + 32,
+              f"入力構成 prev={prev} batt={batt}: {idx} / N_PARAMS={sim.N_PARAMS}")
+    sim.configure_inputs(True, False)
+    env = fresh_env()
+    obs = env.step(np.array([0.5, 0.5]))[0]
+    check(len(obs) == 8, "env観測は8要素")
+    expect = int((0.5 + 0.5) * 0.5 * sim.OUTPUT_GAIN * 100.0) / 100.0
+    check(abs(obs[7] - expect) < 1e-6, f"観測の前回出力は直前に出した指令({expect:.2f})そのもの: {obs[7]:.2f}")
+    w1 = np.random.default_rng(0).normal(size=(7, 16)); w2 = np.random.default_rng(1).normal(size=(16, 2))
+    a = sim.nn_forward(obs, w1, w2)
+    check(a.shape == (2,), "7入力(batt除外+前回出力)のnn_forwardが動く")
+    env.close()
+    sim.configure_inputs(False, True)
+    s = open(APP_C).read()
+    check("NN_USE_BATT" in s and "NN_USE_PREV" in s and "prev_duty=(float)pl/100.0f" in s and "float obs[8]" in s,
+          "app.c: 入力構成マクロと前回出力の更新がある")
+
+
 if __name__ == "__main__":
+    test_inputs()
     test_delay_buffer()
     test_ctrl_dt()
     test_tilt_bias()

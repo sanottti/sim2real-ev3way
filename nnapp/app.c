@@ -99,7 +99,15 @@ static const int gyro_sensor=EV3_PORT_4, left_motor=EV3_PORT_C,
  *  隠れ層サイズは16のまま(v7と同一、nn_forward()の変更は不要)。
  *  MPOS_SCALE=10.0f(v7と同一、下のnn_forward()直前の#define参照)。
  * ============================================================ */
-static const float W1[7][16] = {
+/* 2026-10-09: NN入力構成。重み(W1の行数)と必ず一致させること。
+ *   NN_USE_BATT=0: 電池電圧を入力から外す(v17は入力ゼロでも電圧で出力が偏り、8.0Vで約-21PWM)
+ *   NN_USE_PREV=1: 前回の出力デューティ(左右平均後のpwm/100)を入力に足す
+ *   入力順は Sim(INPUT_IDX)と同じ: gyro_angle,gyro_spd,mpl,mpr,msl,msr,[batt],[prev_duty]
+ *   v17重みは (BATT=1,PREV=0)=7入力。新Sim重み(v18以降)は --prev-act-input の構成に合わせる */
+#define NN_USE_BATT 1
+#define NN_USE_PREV 0
+#define N_OBS (6 + NN_USE_BATT + NN_USE_PREV)
+static const float W1[N_OBS][16] = {
     { +6.48029566f, +0.50872636f, +0.73777592f, -0.32350847f, +0.78911769f, +0.70878768f, +0.84311390f, +1.12361753f, -1.05386209f, +0.72718972f, -1.18165791f, -1.17500818f, -0.57683176f, -1.11617112f, -0.58269936f, -0.39748049f },
     { +3.98274374f, -1.08833575f, +0.88745701f, -0.31278932f, -0.58569431f, +1.11534965f, -1.23512173f, +1.42692304f, +0.46044895f, -1.24673462f, +0.22949597f, -0.43114311f, -0.26725626f, -0.35954380f, -0.17227688f, +0.77332896f },
     { +3.28631067f, +0.82458812f, -0.63392204f, -0.30197367f, -0.24237791f, -0.01573383f, -0.23342462f, +0.90993494f, -1.36109614f, +1.00904715f, +0.70010334f, -0.40783715f, +0.31630933f, -0.56570691f, +0.62391537f, +2.41162920f },
@@ -139,19 +147,25 @@ static const float W2[16][2] = {
 #define BATT_CENTER   7.5f                 /* V */
 #define BATT_SCALE    1.5f                 /* V */
 
-static void nn_forward(const float obs[7], float action[2]){
+static void nn_forward(const float obs[8], float action[2]){
     /* ★ Colabのnormalize_obs()と同一の正規化 */
-    float on[7];
+    float on[N_OBS];
     on[0] = obs[0] / ANGLE_SCALE;
     on[1] = obs[1] / GSPEED_SCALE;
     on[2] = obs[2] / MPOS_SCALE;
     on[3] = obs[3] / MPOS_SCALE;
     on[4] = obs[4] / MSPEED_SCALE;
     on[5] = obs[5] / MSPEED_SCALE;
-    on[6] = (obs[6] - BATT_CENTER) / BATT_SCALE;
+    int k = 6;
+#if NN_USE_BATT
+    on[k++] = (obs[6] - BATT_CENTER) / BATT_SCALE;
+#endif
+#if NN_USE_PREV
+    on[k++] = obs[7];
+#endif
 
     float h[16];int i,j;
-    for(j=0;j<16;j++){float s=0;for(i=0;i<7;i++)s+=on[i]*W1[i][j];h[j]=tanhf(s);}
+    for(j=0;j<16;j++){float s=0;for(i=0;i<N_OBS;i++)s+=on[i]*W1[i][j];h[j]=tanhf(s);}
     for(j=0;j<2;j++){float s=0;for(i=0;i<16;i++)s+=h[i]*W2[i][j];action[j]=tanhf(s);}
 }
 
@@ -271,6 +285,7 @@ void balance_task(intptr_t unused){
     int32_t hl[4]={0,0,0,0},hr[4]={0,0,0,0},pl0=0,pr0=0;
     SYSTIM prev;get_tim(&prev);
     int loop=0;
+    float prev_duty=0.0f;   /* 前回出力デューティ(NN_USE_PREV用)。Simのenv._last_dutyと同じ値 */
 
     while(1){
         SYSTIM now;get_tim(&now);
@@ -297,7 +312,7 @@ void balance_task(intptr_t unused){
         float msr=(dt>0.001f)?(dr/dt)*DEG2RAD:0.0f;
         float batt=(float)ev3_battery_voltage_mV()/1000.0f;
 
-        float obs[7]={gyro_angle,g_spd,mpl,mpr,msl,msr,batt};
+        float obs[8]={gyro_angle,g_spd,mpl,mpr,msl,msr,batt,prev_duty};
         float act[2];nn_forward(obs,act);
 
         /* ★ 応急処置: 左右出力を平均化し、旋回(横倒れの原因)を排除。
@@ -313,6 +328,7 @@ void balance_task(intptr_t unused){
         if(pl>100)pl=100;if(pl<-100)pl=-100;
         if(pr>100)pr=100;if(pr<-100)pr=-100;
         ev3_motor_set_power(left_motor,pl);ev3_motor_set_power(right_motor,pr);
+        prev_duty=(float)pl/100.0f;
 
         log_sample(loop,gyro_angle,g_spd,raw,pl,pr,dt);
 

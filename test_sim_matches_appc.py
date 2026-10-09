@@ -34,13 +34,14 @@ KNOWN_GOOD_W2 = "known_good/p5_stage3_push_20261001/ev3way_w2.npy"
 def _parse_float_array(text, var_name):
     """`static const float NAME[R][C] = { {...}, {...}, ... };` をパースしてnp.arrayにする"""
     m = re.search(
-        r"static const float " + re.escape(var_name) + r"\[(\d+)\]\[(\d+)\]\s*=\s*\{(.*?)\};",
+        r"static const float " + re.escape(var_name) + r"\[(\d+|N_OBS)\]\[(\d+)\]\s*=\s*\{(.*?)\};",
         text, re.DOTALL,
     )
     if not m:
         raise ValueError(f"{var_name} が app.c 内に見つかりません")
-    rows, cols, body = int(m.group(1)), int(m.group(2)), m.group(3)
+    cols, body = int(m.group(2)), m.group(3)
     nums = [float(x[:-1]) for x in re.findall(r"[+-]?\d+\.\d+f", body)]
+    rows = len(nums) // cols if m.group(1) == "N_OBS" else int(m.group(1))
     if len(nums) != rows * cols:
         raise ValueError(f"{var_name}: 期待要素数{rows*cols}に対し{len(nums)}個しかパースできませんでした")
     return np.array(nums, dtype=np.float32).reshape(rows, cols)
@@ -65,22 +66,32 @@ def load_appc():
         "BATT_CENTER": _parse_define_float(text, "BATT_CENTER"),
         "BATT_SCALE": _parse_define_float(text, "BATT_SCALE"),
     }
+    # 2026-10-09: 入力構成マクロ(古いapp.cには無い=従来の7入力)
+    mb = re.search(r"#define\s+NN_USE_BATT\s+(\d)", text)
+    mp = re.search(r"#define\s+NN_USE_PREV\s+(\d)", text)
+    consts["NN_USE_BATT"] = int(mb.group(1)) if mb else 1
+    consts["NN_USE_PREV"] = int(mp.group(1)) if mp else 0
     return w1, w2, consts
 
 
-def appc_nn_forward(obs, w1, w2, mpos_scale, mspeed_scale, gspeed_scale, batt_center, batt_scale):
+def appc_nn_forward(obs, w1, w2, mpos_scale, mspeed_scale, gspeed_scale, batt_center, batt_scale,
+                    use_batt=1, use_prev=0):
     """app.cのnn_forward()と同じ演算(float32)をPythonで再現する"""
     obs = np.asarray(obs, dtype=np.float32)
     angle_scale = np.float32(30.0 * 0.017453293)  # app.cのDEG2RAD定数を使用
-    on = np.array([
+    on = [
         obs[0] / angle_scale,
         obs[1] / np.float32(gspeed_scale),
         obs[2] / np.float32(mpos_scale),
         obs[3] / np.float32(mpos_scale),
         obs[4] / np.float32(mspeed_scale),
         obs[5] / np.float32(mspeed_scale),
-        (obs[6] - np.float32(batt_center)) / np.float32(batt_scale),
-    ], dtype=np.float32)
+    ]
+    if use_batt:
+        on.append((obs[6] - np.float32(batt_center)) / np.float32(batt_scale))
+    if use_prev:
+        on.append(obs[7])
+    on = np.array(on, dtype=np.float32)
     h = np.tanh((on @ w1).astype(np.float32)).astype(np.float32)
     action = np.tanh((h @ w2).astype(np.float32)).astype(np.float32)
     return action
@@ -105,6 +116,7 @@ def main():
     w1_appc, w2_appc, consts = load_appc()
     print(f"app.c: W1{w1_appc.shape} W2{w2_appc.shape} consts={consts}")
 
+    sim.configure_inputs(bool(consts["NN_USE_PREV"]), bool(consts["NN_USE_BATT"]))
     # 1. N_HID/N_OBS/N_ACT が app.c の配列次元と一致するか
     if sim.N_OBS != w1_appc.shape[0] or sim.N_HID != w1_appc.shape[1]:
         failures.append(
@@ -151,15 +163,15 @@ def main():
     # 4. 代表的なobsベクトル群で、Sim.nn_forward()とapp.c再現版の出力が一致するか
     rng = np.random.default_rng(12345)
     test_obs = [
-        np.zeros(7, dtype=np.float32),  # 静止・鉛直
-        np.array([0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 7.5], dtype=np.float32),  # 傾きのみ
-        np.array([0.0, 0.0, 3.0, -3.0, 5.0, -5.0, 7.5], dtype=np.float32),  # 位置ドリフト
-        np.array([0.785, 2.0, 5.0, 5.0, 10.0, 10.0, 6.0], dtype=np.float32),  # 転倒間際・電圧低
+        np.zeros(8, dtype=np.float32),  # 静止・鉛直
+        np.array([0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 7.5, 0.4], dtype=np.float32),  # 傾きのみ
+        np.array([0.0, 0.0, 3.0, -3.0, 5.0, -5.0, 7.5, -0.6], dtype=np.float32),  # 位置ドリフト
+        np.array([0.785, 2.0, 5.0, 5.0, 10.0, 10.0, 6.0, 1.0], dtype=np.float32),  # 転倒間際・電圧低
     ]
     for _ in range(20):
         test_obs.append(rng.uniform(
-            low=[-0.8, -6.0, -6.0, -6.0, -12.0, -12.0, 6.0],
-            high=[0.8, 6.0, 6.0, 6.0, 12.0, 12.0, 8.4],
+            low=[-0.8, -6.0, -6.0, -6.0, -12.0, -12.0, 6.0, -1.0],
+            high=[0.8, 6.0, 6.0, 6.0, 12.0, 12.0, 8.4, 1.0],
         ).astype(np.float32))
 
     max_err = 0.0
@@ -170,6 +182,7 @@ def main():
             mpos_scale=consts["MPOS_SCALE"], mspeed_scale=consts["MSPEED_SCALE"],
             gspeed_scale=consts["GSPEED_SCALE"], batt_center=consts["BATT_CENTER"],
             batt_scale=consts["BATT_SCALE"],
+            use_batt=consts["NN_USE_BATT"], use_prev=consts["NN_USE_PREV"],
         )
         err = float(np.max(np.abs(act_sim - act_appc)))
         max_err = max(max_err, err)
