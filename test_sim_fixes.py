@@ -149,16 +149,31 @@ def test_inputs():
     sim.configure_inputs(True, False)
     env = fresh_env()
     obs = env.step(np.array([0.5, 0.5]))[0]
-    check(len(obs) == 8, "env観測は8要素")
+    check(len(obs) == 9, "env観測は9要素")
     expect = int((0.5 + 0.5) * 0.5 * sim.OUTPUT_GAIN * 100.0) / 100.0
     check(abs(obs[7] - expect) < 1e-6, f"観測の前回出力は直前に出した指令({expect:.2f})そのもの: {obs[7]:.2f}")
     w1 = np.random.default_rng(0).normal(size=(7, 16)); w2 = np.random.default_rng(1).normal(size=(16, 2))
     a = sim.nn_forward(obs, w1, w2)
     check(a.shape == (2,), "7入力(batt除外+前回出力)のnn_forwardが動く")
     env.close()
+    # 傾きの漏れ積分: 一定の傾きθを与え続けると I -> θ*τ に近づく(app.cと同式)
+    sim.configure_inputs(True, False, True)
+    check(sim.INPUT_IDX == [0, 1, 2, 3, 4, 5, 7, 8] and sim.N_OBS == 8, "入力構成 integ: [0..5,7,8]")
+    env = fresh_env()
+    env._ang_int = 0.0
+    env._gyro_angle_est = 0.1
+    dt = sim.effective_ctrl_dt()
+    for _ in range(int(sim.INTEG_TAU_S / dt)):
+        env._gyro_angle_est = 0.1   # 傾き推定を固定して積分だけ見る
+        o = env._obs()
+    exp = 0.1 * sim.INTEG_TAU_S * (1 - np.exp(-1.0))
+    check(abs(o[8] - exp) / exp < 0.06, f"漏れ積分が理論値に近い(I={o[8]:.4f}, 期待{exp:.4f})")
+    env.close()
     sim.configure_inputs(False, True)
     s = open(APP_C).read()
-    check("NN_USE_BATT" in s and "NN_USE_PREV" in s and "prev_duty=(float)pl/100.0f" in s and "float obs[8]" in s,
+    check("NN_USE_INT" in s and "ang_int+=(gyro_angle-ang_int/INTEG_TAU_S)*dt;" in s and "float obs[9]" in s,
+          "app.c: 傾き漏れ積分(NN_USE_INT)がある")
+    check("NN_USE_BATT" in s and "NN_USE_PREV" in s and "prev_duty=(float)pl/100.0f" in s and "float obs[9]" in s,
           "app.c: 入力構成マクロと前回出力の更新がある")
 
 

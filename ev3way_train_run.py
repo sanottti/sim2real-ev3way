@@ -348,9 +348,12 @@ SAT_PENALTY_START = 0.6
 #   smooth_penalty_w: 出力の急変(前ステップとの差の二乗)へのペナルティ係数。0=無効(チャタリング抑制用)
 #   prev_act_input: NNの入力に「前回の出力デューティ」を足す(8番目の観測。左右平均化後の値なので1個)
 #   batt_input: Falseで電池電圧をNN入力から外す(2026-10-09: v17は入力ゼロでも電圧で出力が偏る=8.0Vで約-21PWM)
+#   integ_input: NN入力に「傾き(ジャイロ積分推定)の漏れ積分」を足す(9番目の観測。PIDのI項。INTEG_TAU_S秒で減衰)
 #   batt_range: 電池電圧のランダム化範囲(lo,hi)。None=PARAMS既定(6.0〜8.4V)。実機ログは起動時7.9〜8.1V、走行中7.4Vまで低下
 SIM_OPTS = {"real_ctrl_dt_s": None, "init_tilt_bias_deg": 0.0, "com_width_scale": 2.0,
-            "smooth_penalty_w": 0.0, "prev_act_input": False, "batt_input": True, "batt_range": None}
+            "smooth_penalty_w": 0.0, "prev_act_input": False, "batt_input": True, "batt_range": None,
+            "integ_input": False}
+INTEG_TAU_S = 2.0   # 傾き漏れ積分の時定数[s]。正規化は ANGLE_SCALE*INTEG_TAU_S(定常でθ=30°なら1)
 HISTORY_LEN = 16   # 遅れバッファの長さ(遅れの最大ステップ数より十分大きいこと)
 
 FIDELITY_FLAG_NAMES = [
@@ -448,6 +451,7 @@ class EV3WayEnv:
         self._duty_l = self._duty_r = 0.0
         # 2-2: ジャイロ積分推定器の内部状態(app.cのgyro_angle/gyro_offsetと同じ)
         self._gyro_angle_est = 0.0
+        self._ang_int = 0.0
         self._gyro_offset_ema = 0.0
         # 2-8: 直前ステップの出力duty絶対値平均(電池サグのモデルに使う)
         self._last_output_mag = 0.0
@@ -691,6 +695,8 @@ class EV3WayEnv:
             pitch = true_pitch
             gyro_speed = va[1] + self.rng.normal(0, math.radians(self._gyro_noise_ep))
 
+        self._ang_int += (pitch - self._ang_int / INTEG_TAU_S) * dt   # 漏れ積分(app.cのang_intと同式)
+
         lw = p.getJointState(self.robot, self.jl, physicsClientId=self.cid)
         rw = p.getJointState(self.robot, self.jr, physicsClientId=self.cid)
         cnt_l, cnt_r = lw[0], rw[0]
@@ -716,7 +722,7 @@ class EV3WayEnv:
 
         return np.array([
             pitch, gyro_speed, cnt_l, cnt_r, spd_l, spd_r,
-            batt, self._last_duty,
+            batt, self._last_duty, self._ang_int,
         ], dtype=np.float32)
 
     def step(self, action):
@@ -894,6 +900,7 @@ BATT_SCALE   = 1.5
 
 def normalize_obs(obs):
     prev = obs[7] if len(obs) > 7 else 0.0
+    integ = obs[8] / (ANGLE_SCALE * INTEG_TAU_S) if len(obs) > 8 else 0.0
     full = np.array([
         obs[0] / ANGLE_SCALE,
         obs[1] / GSPEED_SCALE,
@@ -903,6 +910,7 @@ def normalize_obs(obs):
         obs[5] / MSPEED_SCALE,
         (obs[6] - BATT_CENTER) / BATT_SCALE,
         prev,
+        integ,
     ], dtype=np.float32)
     return full[INPUT_IDX]
 
@@ -927,9 +935,9 @@ N_PARAMS = N_OBS*N_HID + N_HID*N_ACT
 INPUT_IDX = [0, 1, 2, 3, 4, 5, 6]
 
 
-def configure_inputs(prev_act_input=False, batt_input=True):
+def configure_inputs(prev_act_input=False, batt_input=True, integ_input=False):
     global INPUT_IDX, N_OBS, N_PARAMS
-    INPUT_IDX = [0, 1, 2, 3, 4, 5] + ([6] if batt_input else []) + ([7] if prev_act_input else [])
+    INPUT_IDX = [0, 1, 2, 3, 4, 5] + ([6] if batt_input else []) + ([7] if prev_act_input else []) + ([8] if integ_input else [])
     N_OBS = len(INPUT_IDX)
     N_PARAMS = N_OBS*N_HID + N_HID*N_ACT
 
@@ -1047,7 +1055,7 @@ def _init_worker(weight_ball=False, legacy_reward=False, fidelity_flags=None, tr
     SAT_PENALTY_W = sat_penalty
     if sim_opts:
         SIM_OPTS.update(sim_opts)
-        configure_inputs(SIM_OPTS["prev_act_input"], SIM_OPTS["batt_input"])
+        configure_inputs(SIM_OPTS["prev_act_input"], SIM_OPTS["batt_input"], SIM_OPTS["integ_input"])
         if SIM_OPTS["batt_range"]:
             PARAMS["battery_voltage_range"] = tuple(SIM_OPTS["batt_range"])
     if train_max_steps is not None:
@@ -1462,6 +1470,10 @@ def parse_args():
                      help="--calib-robust/--calib-body時の重心オフセット(x,z)幅の倍率(既定2.0=従来通り)")
     ap.add_argument("--prev-act-input", action="store_true",
                      help="NN入力に前回の出力デューティを足す(7入力の重みからは新規行0で引き継ぎ)")
+    ap.add_argument("--integ-input", action="store_true",
+                     help="NN入力に傾きの漏れ積分(PIDのI項、時定数INTEG_TAU_S)を足す")
+    ap.add_argument("--init-inputs", type=str, default="0,1,2,3,4,5,6",
+                     help="--w1で読む重みの入力構成(env観測の添字。例: 前回出力ありで電圧なしなら 0,1,2,3,4,5,7)")
     ap.add_argument("--no-batt-input", action="store_true",
                      help="電池電圧をNN入力から外す(Simの電圧ランダム化・トルク換算は残る)")
     ap.add_argument("--batt-range", type=float, nargs=2, default=None, metavar=("LO", "HI"),
@@ -1489,9 +1501,9 @@ def main():
     SAT_PENALTY_W = args.sat_penalty
     SIM_OPTS.update(real_ctrl_dt_s=(args.real_ctrl_dt_ms / 1000.0 if args.real_ctrl_dt_ms > 0 else None),
                     init_tilt_bias_deg=args.init_tilt_bias_deg, com_width_scale=args.com_width_scale,
-                    smooth_penalty_w=args.smooth_penalty, prev_act_input=args.prev_act_input,
+                    smooth_penalty_w=args.smooth_penalty, prev_act_input=args.prev_act_input, integ_input=args.integ_input,
                     batt_input=not args.no_batt_input, batt_range=args.batt_range)
-    configure_inputs(args.prev_act_input, not args.no_batt_input)
+    configure_inputs(args.prev_act_input, not args.no_batt_input, args.integ_input)
     if args.batt_range:
         PARAMS["battery_voltage_range"] = tuple(args.batt_range)
     print(f"★Simオプション(2026-10-09): {SIM_OPTS}", flush=True)
@@ -1533,14 +1545,14 @@ def main():
             print(f"既存重みの読み込みに失敗しました({e})。新規学習します。")
             prev_w1 = prev_w2 = None
 
-    if (prev_w1 is not None and prev_w1.shape == (7, N_HID) and N_OBS != 7 or
-            prev_w1 is not None and prev_w1.shape == (7, N_HID) and INPUT_IDX != list(range(7))):
-        # 従来の7入力重みから入力構成を変えて引き継ぐ: 共通の入力は行をコピー、新規入力(前回出力)は0行
+    _src_idx = [int(x) for x in args.init_inputs.split(",")]
+    if prev_w1 is not None and prev_w1.shape == (len(_src_idx), N_HID) and _src_idx != INPUT_IDX:
+        # 入力構成を変えて引き継ぐ: 共通の入力(env観測の添字が同じ)は行をコピー、新規入力は0行
         _w1n = np.zeros((N_OBS, N_HID), dtype=prev_w1.dtype)
         for _j, _k in enumerate(INPUT_IDX):
-            if _k < 7:
-                _w1n[_j] = prev_w1[_k]
-        print(f"入力構成 {INPUT_IDX} へ既存重みの行を対応付けて引き継ぎます(新規入力の重みは0)")
+            if _k in _src_idx:
+                _w1n[_j] = prev_w1[_src_idx.index(_k)]
+        print(f"入力構成 {_src_idx} -> {INPUT_IDX} へ既存重みの行を対応付けて引き継ぎます(新規入力の重みは0)")
         prev_w1 = _w1n
     if (prev_w1 is not None and prev_w2 is not None and
             prev_w1.shape == (N_OBS, N_HID) and prev_w2.shape == (N_HID, N_ACT)):

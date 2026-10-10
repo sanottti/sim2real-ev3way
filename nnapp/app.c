@@ -106,7 +106,9 @@ static const int gyro_sensor=EV3_PORT_4, left_motor=EV3_PORT_C,
  *   v17重みは (BATT=1,PREV=0)=7入力。新Sim重み(v18以降)は --prev-act-input の構成に合わせる */
 #define NN_USE_BATT 1
 #define NN_USE_PREV 0
-#define N_OBS (6 + NN_USE_BATT + NN_USE_PREV)
+#define NN_USE_INT  0   /* 1: 傾き(gyro_angle)の漏れ積分を入力に足す(PIDのI項)。時定数はINTEG_TAU_S(Simと同値) */
+#define INTEG_TAU_S 2.0f
+#define N_OBS (6 + NN_USE_BATT + NN_USE_PREV + NN_USE_INT)
 static const float W1[N_OBS][16] = {
     { +6.48029566f, +0.50872636f, +0.73777592f, -0.32350847f, +0.78911769f, +0.70878768f, +0.84311390f, +1.12361753f, -1.05386209f, +0.72718972f, -1.18165791f, -1.17500818f, -0.57683176f, -1.11617112f, -0.58269936f, -0.39748049f },
     { +3.98274374f, -1.08833575f, +0.88745701f, -0.31278932f, -0.58569431f, +1.11534965f, -1.23512173f, +1.42692304f, +0.46044895f, -1.24673462f, +0.22949597f, -0.43114311f, -0.26725626f, -0.35954380f, -0.17227688f, +0.77332896f },
@@ -147,7 +149,7 @@ static const float W2[16][2] = {
 #define BATT_CENTER   7.5f                 /* V */
 #define BATT_SCALE    1.5f                 /* V */
 
-static void nn_forward(const float obs[8], float action[2]){
+static void nn_forward(const float obs[9], float action[2]){
     /* ★ Colabのnormalize_obs()と同一の正規化 */
     float on[N_OBS];
     on[0] = obs[0] / ANGLE_SCALE;
@@ -162,6 +164,9 @@ static void nn_forward(const float obs[8], float action[2]){
 #endif
 #if NN_USE_PREV
     on[k++] = obs[7];
+#endif
+#if NN_USE_INT
+    on[k++] = obs[8] / (ANGLE_SCALE * INTEG_TAU_S);
 #endif
 
     float h[16];int i,j;
@@ -285,6 +290,7 @@ void balance_task(intptr_t unused){
     int32_t hl[4]={0,0,0,0},hr[4]={0,0,0,0},pl0=0,pr0=0;
     SYSTIM prev;get_tim(&prev);
     int loop=0;
+    float ang_int=0.0f;     /* 傾きの漏れ積分(NN_USE_INT用)。Simのenv._ang_intと同式 */
     float prev_duty=0.0f;   /* 前回出力デューティ(NN_USE_PREV用)。Simのenv._last_dutyと同じ値 */
 
     while(1){
@@ -301,6 +307,7 @@ void balance_task(intptr_t unused){
         float g_spd_dps=(float)raw-gyro_offset;
         float g_spd=g_spd_dps*DEG2RAD;
         gyro_angle+=g_spd*dt;
+        ang_int+=(gyro_angle-ang_int/INTEG_TAU_S)*dt;
 
         int32_t cl=ev3_motor_get_counts(left_motor),cr=ev3_motor_get_counts(right_motor);
         float mpl=(float)cl*DEG2RAD, mpr=(float)cr*DEG2RAD;
@@ -312,7 +319,7 @@ void balance_task(intptr_t unused){
         float msr=(dt>0.001f)?(dr/dt)*DEG2RAD:0.0f;
         float batt=(float)ev3_battery_voltage_mV()/1000.0f;
 
-        float obs[8]={gyro_angle,g_spd,mpl,mpr,msl,msr,batt,prev_duty};
+        float obs[9]={gyro_angle,g_spd,mpl,mpr,msl,msr,batt,prev_duty,ang_int};
         float act[2];nn_forward(obs,act);
 
         /* ★ 応急処置: 左右出力を平均化し、旋回(横倒れの原因)を排除。

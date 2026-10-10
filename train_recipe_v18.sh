@@ -31,9 +31,9 @@ cp ev3way_w2_$FROM.npy ev3way_w2_$NAME.npy
 LOG=train_run_${NAME}_$(date +%y%m%d_%H%M%S).log
 ( nohup caffeinate -ims venv/bin/python -u ev3way_train_run.py \
   --w1 ev3way_w1_$NAME.npy --w2 ev3way_w2_$NAME.npy \
-  --popsize 150 --generations 150 --sigma0-resume 0.2 --stagnation-limit 60 --restart-sigma 0.3 \
-  --workers ${WORKERS:-4} --curriculum-gens 80 --max-difficulty 0.5 --checkpoint-every 5 \
+  --popsize 150 --generations ${GENS:-150} --sigma0-resume 0.2 --stagnation-limit 60 --restart-sigma 0.3 \
+  --workers ${WORKERS:-4} --curriculum-gens ${CURR:-80} --max-difficulty 0.5 --checkpoint-every 5 \
   --fidelity-all --calib-robust --train-seconds 15.0 \
   --real-ctrl-dt-ms 5.34 --init-tilt-bias-deg "$TILT_BIAS" --com-width-scale "$COM_SCALE" \
-  --smooth-penalty "$SMOOTH" $EXTRA > "$LOG" 2>&1 & )
+  --smooth-penalty "$SMOOTH" --sat-penalty "${SAT:-0.0}" $EXTRA > "$LOG" 2>&1 & )
 echo "started: $LOG"

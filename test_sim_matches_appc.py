@@ -71,11 +71,13 @@ def load_appc():
     mp = re.search(r"#define\s+NN_USE_PREV\s+(\d)", text)
     consts["NN_USE_BATT"] = int(mb.group(1)) if mb else 1
     consts["NN_USE_PREV"] = int(mp.group(1)) if mp else 0
+    mi = re.search(r"#define\s+NN_USE_INT\s+(\d)", text)
+    consts["NN_USE_INT"] = int(mi.group(1)) if mi else 0
     return w1, w2, consts
 
 
 def appc_nn_forward(obs, w1, w2, mpos_scale, mspeed_scale, gspeed_scale, batt_center, batt_scale,
-                    use_batt=1, use_prev=0):
+                    use_batt=1, use_prev=0, use_int=0, integ_norm=1.0):
     """app.cのnn_forward()と同じ演算(float32)をPythonで再現する"""
     obs = np.asarray(obs, dtype=np.float32)
     angle_scale = np.float32(30.0 * 0.017453293)  # app.cのDEG2RAD定数を使用
@@ -91,6 +93,8 @@ def appc_nn_forward(obs, w1, w2, mpos_scale, mspeed_scale, gspeed_scale, batt_ce
         on.append((obs[6] - np.float32(batt_center)) / np.float32(batt_scale))
     if use_prev:
         on.append(obs[7])
+    if use_int:
+        on.append(obs[8] / np.float32(integ_norm))
     on = np.array(on, dtype=np.float32)
     h = np.tanh((on @ w1).astype(np.float32)).astype(np.float32)
     action = np.tanh((h @ w2).astype(np.float32)).astype(np.float32)
@@ -116,7 +120,7 @@ def main():
     w1_appc, w2_appc, consts = load_appc()
     print(f"app.c: W1{w1_appc.shape} W2{w2_appc.shape} consts={consts}")
 
-    sim.configure_inputs(bool(consts["NN_USE_PREV"]), bool(consts["NN_USE_BATT"]))
+    sim.configure_inputs(bool(consts["NN_USE_PREV"]), bool(consts["NN_USE_BATT"]), bool(consts["NN_USE_INT"]))
     # 1. N_HID/N_OBS/N_ACT が app.c の配列次元と一致するか
     if sim.N_OBS != w1_appc.shape[0] or sim.N_HID != w1_appc.shape[1]:
         failures.append(
@@ -163,15 +167,15 @@ def main():
     # 4. 代表的なobsベクトル群で、Sim.nn_forward()とapp.c再現版の出力が一致するか
     rng = np.random.default_rng(12345)
     test_obs = [
-        np.zeros(8, dtype=np.float32),  # 静止・鉛直
-        np.array([0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 7.5, 0.4], dtype=np.float32),  # 傾きのみ
-        np.array([0.0, 0.0, 3.0, -3.0, 5.0, -5.0, 7.5, -0.6], dtype=np.float32),  # 位置ドリフト
-        np.array([0.785, 2.0, 5.0, 5.0, 10.0, 10.0, 6.0, 1.0], dtype=np.float32),  # 転倒間際・電圧低
+        np.zeros(9, dtype=np.float32),  # 静止・鉛直
+        np.array([0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 7.5, 0.4, 0.1], dtype=np.float32),  # 傾きのみ
+        np.array([0.0, 0.0, 3.0, -3.0, 5.0, -5.0, 7.5, -0.6, -0.2], dtype=np.float32),  # 位置ドリフト
+        np.array([0.785, 2.0, 5.0, 5.0, 10.0, 10.0, 6.0, 1.0, 0.3], dtype=np.float32),  # 転倒間際・電圧低
     ]
     for _ in range(20):
         test_obs.append(rng.uniform(
-            low=[-0.8, -6.0, -6.0, -6.0, -12.0, -12.0, 6.0, -1.0],
-            high=[0.8, 6.0, 6.0, 6.0, 12.0, 12.0, 8.4, 1.0],
+            low=[-0.8, -6.0, -6.0, -6.0, -12.0, -12.0, 6.0, -1.0, -0.5],
+            high=[0.8, 6.0, 6.0, 6.0, 12.0, 12.0, 8.4, 1.0, 0.5],
         ).astype(np.float32))
 
     max_err = 0.0
@@ -183,6 +187,7 @@ def main():
             gspeed_scale=consts["GSPEED_SCALE"], batt_center=consts["BATT_CENTER"],
             batt_scale=consts["BATT_SCALE"],
             use_batt=consts["NN_USE_BATT"], use_prev=consts["NN_USE_PREV"],
+            use_int=consts["NN_USE_INT"], integ_norm=30.0 * 0.017453293 * 2.0,
         )
         err = float(np.max(np.abs(act_sim - act_appc)))
         max_err = max(max_err, err)
