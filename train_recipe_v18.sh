@@ -26,6 +26,9 @@ COM_SCALE=${COM_SCALE:-2.0}
 EXTRA="--prev-act-input --batt-range ${BATT_LO:-7.2} ${BATT_HI:-8.3}"
 [ "${NO_DEADTIME:-1}" = "1" ] && EXTRA="$EXTRA --no-startup-deadtime"
 [ "${BATT_INPUT:-0}" = "0" ] && EXTRA="$EXTRA --no-batt-input"
+[ "${INTEG:-0}" = "1" ] && EXTRA="$EXTRA --integ-input"
+# 引き継ぎ元重みの入力構成(環境index)。v18系7入力(電圧なし+前回出力)から積分入力を足すなら INIT_INPUTS=0,1,2,3,4,5,7
+[ -n "${INIT_INPUTS:-}" ] && EXTRA="$EXTRA --init-inputs $INIT_INPUTS"
 cp ev3way_w1_$FROM.npy ev3way_w1_$NAME.npy
 cp ev3way_w2_$FROM.npy ev3way_w2_$NAME.npy
 LOG=train_run_${NAME}_$(date +%y%m%d_%H%M%S).log
